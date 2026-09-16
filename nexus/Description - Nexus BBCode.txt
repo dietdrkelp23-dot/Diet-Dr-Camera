@@ -1,0 +1,217 @@
+[size=5][b]Diet Dr Camera[/b][/size]
+
+A configurable camera overhaul for Skyrim with per-state framing, smooth transitions,
+first-person FOV and effects, dialogue and menu cameras, and shareable presets.
+Configure the camera in game through SKSE Menu Framework and Quick Tune.
+
+[b]Features[/b]
+[list]
+[*]Third-person camera profiles for movement, combat, horseback, transformations and more.
+[*]Independent indoor and location overrides, with weapon and animation profiles.
+[*]Camera noise and projectile Repulse, with optional target-lock integration.
+[*]Separate nearby NPC Magic, Melee, Archery, Shouts and Transformations noise in both views.
+[*]Player Hit Shake for melee, arrows, bolts and spell/staff missile impacts, with Strength, Speed, Bounce and Texture controls.
+[*]Dialogue, menu, death and ragdoll cameras.
+[*]Replacement Vanity Camera that stays active while you look around.
+[*]Flee Framing that holds fast approaches through turns and eases back as momentum settles. New movement shouts start fresh.
+[*]Horseback Drawing/Zoomed profiles and stabilized mounted target tracking.
+[*]Ritual staff entries for mod-added spells across all five schools, including sneaking and target lock.
+[*]Separate indoor/outdoor collision options for ground, doors, trees and walls.
+[*]Preset saving, sharing, copy/paste and controller navigation.
+[/list]
+
+[b]DIET DR CAMERA 1.0.0 - REQUIREMENTS[/b]
+
+Windows x64, Skyrim Special Edition / Anniversary Edition.
+One DLL targets the known SE/AE executable versions listed in RUNTIME-SUPPORT.md,
+including 1.5.97, Steam/GOG 1.6 and Steam 1.7 through 1.7.104. These are implemented
+targets; full gameplay testing across every runtime has not been completed.
+Skyrim VR, Microsoft Store/Game Pass and Epic builds are not supported.
+
+[b]REQUIRED[/b]
+
+SKSE64 - Skyrim Script Extender team
+Install the SKSE build matching your Skyrim executable version.
+[url=https://skse.silverlock.org/]https://skse.silverlock.org/[/url]
+
+Address Library for SKSE Plugins - meh321
+Install the package containing the address database for your executable.
+Use the SE download for 1.5 and the AE download for 1.6/1.7.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/32444]https://www.nexusmods.com/skyrimspecialedition/mods/32444[/url]
+
+SKSE Menu Framework 3 - Erruptive / QTR-Modding
+Required for the in-game settings and Quick Tune interface. Use a framework build
+compatible with your runtime and install its own requirements as well.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/120352]https://www.nexusmods.com/skyrimspecialedition/mods/120352[/url]
+
+ImGui Icons - powerofthree
+Required by current SKSE Menu Framework for its gamepad button prompts.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/114790]https://www.nexusmods.com/skyrimspecialedition/mods/114790[/url]
+
+Microsoft Visual C++ Redistributable (x64)
+Install the current supported x64 runtime for native C++ plugins.
+[url=https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist]https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist[/url]
+
+[b]OPTIONAL INTEGRATIONS[/b]
+
+True Directional Movement - Ersh
+Enables the target-lock and yaw-control integration.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/51614]https://www.nexusmods.com/skyrimspecialedition/mods/51614[/url]
+
+Open Animation Replacer - Ersh
+Identifies active replacement animations for animation camera profiles.
+Without it, animation profiles use raw animation paths.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/92109]https://www.nexusmods.com/skyrimspecialedition/mods/92109[/url]
+
+[b]INSTALLATION[/b]
+
+Install Diet Dr Camera-1.0.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
+Open SKSE Menu Framework with its configured shortcut (upstream default F1),
+then select Diet Dr Camera. Save your tuning to a named preset in the Presets panel.
+The main archive contains only the DLL and the empty stagger-camera animation
+required by the mod. It does not overwrite personal presets.
+
+SkyUI is not required by DDC. There is no ESP, MCM, or Papyrus script component.
+CommonLibSSE-NG and the C++ libraries are compiled in; players do not install them.
+The Source ZIP is for developers and license compliance, not installation in MO2.
+Use one third-person camera overhaul; SmoothCam and DDC overlap.
+Use one camera-noise implementation; Camera Noise SE and DDC overlap.
+
+The installation/compatibility guide, credits and license files are in the
+Source ZIP, available on the same mod page.
+
+[b]Compatibility and release status[/b]
+Use one third-person camera overhaul and one camera-noise implementation.
+SmoothCam and Camera Noise SE overlap with DDC. Other dialogue, death-camera and
+unpaused-menu mods may also overlap. Improved Camera has specific FOV integration,
+but every combination has not been verified.
+
+Gameplay testing is on Skyrim 1.6.1170, including accepted Mysticism projectile
+tracing, staff Ritual selection, Vanity and first-person Hit Shake. The other
+known SE/AE versions listed in RUNTIME-SUPPORT.md have incomplete gameplay coverage.
+An earlier intermittent movement-stall report around werewolf combat, target lock
+and menus has not yet been confirmed resolved. See RELEASE-NOTES.md.
+
+Hit Shake starts at zero Strength. It uses native hit events and does not require
+Precision. Projectile Hit Shake applies to direct actor hits and becomes softer
+with distance; scenery hits, beams and lingering damage do not trigger it.
+
+[b]Presets and updates[/b]
+Save your tuning to a named preset in the Presets panel. The main download contains
+no personal preset files. Public preset compatibility begins with 1.0; later updates
+must preserve existing tuning and defaults. See PRESET-AUTHORS.md before sharing
+presets on Nexus. Keep a backup of your personal presets when updating.
+
+[b]License and source[/b]
+GPL-3.0-or-later with modding/linking permissions; see LICENSING.md in the source download.
+The matching [b]Diet Dr Camera - Source-1.0.0.zip[/b] is in this page's Files section.
+It includes source, dependency sources, build recipes and tests. Players only need
+the main download. Third-party components retain their own terms.
+
+[b]DIET DR CAMERA - FULL CREDITS[/b]
+
+Diet Dr Camera builds on the tools, interfaces, research, and shared source of the Skyrim modding community. Thank you to the following authors and projects.
+
+[b]FOUNDATIONS AND IN-GAME INTERFACE[/b]
+
+The SKSE team: Ian Patterson, Stephen Abel, Paul Connelly, and Brendan Borthwick - SKSE64
+the script extender and native plugin infrastructure.
+[url=https://skse.silverlock.org/]https://skse.silverlock.org/[/url]
+
+Ryan-rsm-McKenzie, CharmedBaryon, alandtse, charles-barros, and the CommonLib community - CommonLibSSE-NG
+C++ interfaces to Skyrim and SKSE.
+[url=https://github.com/alandtse/CommonLibSSE-NG]https://github.com/alandtse/CommonLibSSE-NG[/url]
+
+meh321 - Address Library for SKSE Plugins
+runtime address resolution.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/32444]https://www.nexusmods.com/skyrimspecialedition/mods/32444[/url]
+
+Erruptive / QTR-Modding and contributors - SKSE Menu Framework
+the in-game UI host and public API.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/120352]https://www.nexusmods.com/skyrimspecialedition/mods/120352[/url]
+
+Omar Cornut and contributors - Dear ImGui
+the UI toolkit supplied through SKSE Menu Framework.
+[url=https://github.com/ocornut/imgui]https://github.com/ocornut/imgui[/url]
+
+[b]LIBRARIES[/b]
+
+Tsuda Kageyu, Vyacheslav Patkov, and contributors - MinHook / hde64
+instruction decoding used to validate runtime hooks.
+[url=https://github.com/TsudaKageyu/minhook]https://github.com/TsudaKageyu/minhook[/url]
+
+Microsoft Corporation and contributors - DirectXTK and DirectXMath
+DirectX helper and math libraries used by CommonLib.
+[url=https://github.com/microsoft/DirectXTK]https://github.com/microsoft/DirectXTK[/url]
+[url=https://github.com/microsoft/DirectXMath]https://github.com/microsoft/DirectXMath[/url]
+
+Gabi Melman and contributors - spdlog
+logging.
+[url=https://github.com/gabime/spdlog]https://github.com/gabime/spdlog[/url]
+
+Mark Gillard and contributors - toml++
+TOML settings and preset parsing.
+[url=https://github.com/marzer/tomlplusplus]https://github.com/marzer/tomlplusplus[/url]
+
+Victor Zverovich and contributors - fmt
+string formatting.
+[url=https://github.com/fmtlib/fmt]https://github.com/fmtlib/fmt[/url]
+
+Niels Lohmann and contributors - nlohmann/json
+JSON parsing.
+[url=https://github.com/nlohmann/json]https://github.com/nlohmann/json[/url]
+
+Kristofer Berggren - rapidcsv
+CSV support used by CommonLib.
+[url=https://github.com/d99kris/rapidcsv]https://github.com/d99kris/rapidcsv[/url]
+
+[b]OPTIONAL INTEGRATIONS[/b]
+
+Ersh - True Directional Movement
+the public target-lock and yaw-control API.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/51614]https://www.nexusmods.com/skyrimspecialedition/mods/51614[/url]
+
+Ersh - Open Animation Replacer
+the public API for identifying active replacement animations.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/92109]https://www.nexusmods.com/skyrimspecialedition/mods/92109[/url]
+
+[b]ADAPTED CODE, RESEARCH, AND INSPIRATION[/b]
+
+Vermunds and contributors - Dialogue Movement Enabler
+the dialogue input-event relabel approach used for movement during dialogue.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/43708]https://www.nexusmods.com/skyrimspecialedition/mods/43708[/url]
+
+SniffleMan, Vermunds, and Skyrim Souls RE contributors - Skyrim Souls RE
+unpaused-menu hooks and menu-view caching work adapted by Diet Dr Camera.
+[url=https://github.com/Vermunds/SkyrimSoulsRE]https://github.com/Vermunds/SkyrimSoulsRE[/url]
+
+Ersh - No Furniture Camera
+the furniture-camera suppression work adapted by Diet Dr Camera.
+[url=https://github.com/ersh1/NoFurnitureCamera]https://github.com/ersh1/NoFurnitureCamera[/url]
+
+The Free Death Camera authors and contributors - Free Death Camera
+the raw-mouse free-look approach and camera rotation helpers referenced and adapted for the death camera.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/134671]https://www.nexusmods.com/skyrimspecialedition/mods/134671[/url]
+
+doodlum - Camera Noise SE
+the camera-root noise overlay approach, camera update hook, and view/projection refresh reference.
+[url=https://github.com/doodlum/skyrim-camera-noise]https://github.com/doodlum/skyrim-camera-noise[/url]
+
+mwilsnd and contributors - SmoothCam
+reference work on third-person cameras, aiming/projectiles, dialogue, and camera composition.
+[url=https://github.com/mwilsnd/SkyrimSE-SmoothCam]https://github.com/mwilsnd/SkyrimSE-SmoothCam[/url]
+
+ArranzCNL and the Improved Camera team - Improved Camera SE / SE-NG
+first-person FOV and camera compatibility research.
+[url=https://github.com/ArranzCNL/ImprovedCameraSE-NG]https://github.com/ArranzCNL/ImprovedCameraSE-NG[/url]
+
+NasGorTelorCeplok, MaskedRPGFan, and the Alternate Conversation Camera contributors - Alternate / Improved Alternate Conversation Camera
+reference work on conversation camera framing and rotation.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/68210]https://www.nexusmods.com/skyrimspecialedition/mods/68210[/url]
+
+Special thanks to the SKSE and CommonLib communities for documenting Skyrim's engine, and to everyone who tested Diet Dr Camera, reported bugs, shared logs, or helped track down camera edge cases.
+
+Third-party components retain their own licenses. License files and notices are included in the source download. Projects credited for research or inspiration are acknowledgements, not additional installation requirements.
+
+DDC is GPL-3.0-or-later with modding/linking permissions. See LICENSING.md.
+The source download contains the exact dependency sources, recipes and patches.

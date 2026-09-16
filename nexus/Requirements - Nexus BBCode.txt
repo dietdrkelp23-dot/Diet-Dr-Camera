@@ -1,0 +1,59 @@
+[b]DIET DR CAMERA 1.0.0 - REQUIREMENTS[/b]
+
+Windows x64, Skyrim Special Edition / Anniversary Edition.
+One DLL targets the known SE/AE executable versions listed in RUNTIME-SUPPORT.md,
+including 1.5.97, Steam/GOG 1.6 and Steam 1.7 through 1.7.104. These are implemented
+targets; full gameplay testing across every runtime has not been completed.
+Skyrim VR, Microsoft Store/Game Pass and Epic builds are not supported.
+
+[b]REQUIRED[/b]
+
+SKSE64 - Skyrim Script Extender team
+Install the SKSE build matching your Skyrim executable version.
+[url=https://skse.silverlock.org/]https://skse.silverlock.org/[/url]
+
+Address Library for SKSE Plugins - meh321
+Install the package containing the address database for your executable.
+Use the SE download for 1.5 and the AE download for 1.6/1.7.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/32444]https://www.nexusmods.com/skyrimspecialedition/mods/32444[/url]
+
+SKSE Menu Framework 3 - Erruptive / QTR-Modding
+Required for the in-game settings and Quick Tune interface. Use a framework build
+compatible with your runtime and install its own requirements as well.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/120352]https://www.nexusmods.com/skyrimspecialedition/mods/120352[/url]
+
+ImGui Icons - powerofthree
+Required by current SKSE Menu Framework for its gamepad button prompts.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/114790]https://www.nexusmods.com/skyrimspecialedition/mods/114790[/url]
+
+Microsoft Visual C++ Redistributable (x64)
+Install the current supported x64 runtime for native C++ plugins.
+[url=https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist]https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist[/url]
+
+[b]OPTIONAL INTEGRATIONS[/b]
+
+True Directional Movement - Ersh
+Enables the target-lock and yaw-control integration.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/51614]https://www.nexusmods.com/skyrimspecialedition/mods/51614[/url]
+
+Open Animation Replacer - Ersh
+Identifies active replacement animations for animation camera profiles.
+Without it, animation profiles use raw animation paths.
+[url=https://www.nexusmods.com/skyrimspecialedition/mods/92109]https://www.nexusmods.com/skyrimspecialedition/mods/92109[/url]
+
+[b]INSTALLATION[/b]
+
+Install Diet Dr Camera-1.0.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
+Open SKSE Menu Framework with its configured shortcut (upstream default F1),
+then select Diet Dr Camera. Save your tuning to a named preset in the Presets panel.
+The main archive contains only the DLL and the empty stagger-camera animation
+required by the mod. It does not overwrite personal presets.
+
+SkyUI is not required by DDC. There is no ESP, MCM, or Papyrus script component.
+CommonLibSSE-NG and the C++ libraries are compiled in; players do not install them.
+The Source ZIP is for developers and license compliance, not installation in MO2.
+Use one third-person camera overhaul; SmoothCam and DDC overlap.
+Use one camera-noise implementation; Camera Noise SE and DDC overlap.
+
+The installation/compatibility guide, credits and license files are in the
+Source ZIP, available on the same mod page.

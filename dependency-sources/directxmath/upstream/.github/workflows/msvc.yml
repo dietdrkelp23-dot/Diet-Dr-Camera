@@ -1,0 +1,70 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# http://go.microsoft.com/fwlink/?LinkID=615560
+
+name: Microsoft C++ Code Analysis
+
+on:
+  push:
+    branches: "main"
+    paths-ignore:
+      - '*.md'
+      - LICENSE
+      - '.azuredevops/**'
+      - '.github/*.md'
+      - '.nuget/*'
+      - build/*.ps1
+  pull_request:
+    branches: "main"
+    paths-ignore:
+      - '*.md'
+      - LICENSE
+      - '.azuredevops/**'
+      - '.github/*.md'
+      - '.nuget/*'
+      - build/*.ps1
+
+  schedule:
+    - cron: '34 20 * * 6'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    name: Analyze
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Clone test repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: walbourn/directxmathtest
+          path: Tests
+          ref: main
+
+      - name: Configure CMake
+        working-directory: ./Tests/headertest
+        run: cmake -B out
+
+      - name: Initialize MSVC Code Analysis
+        uses: microsoft/msvc-code-analysis-action@24c285ab36952c9e9182f4b78dfafbac38a7e5ee # v0.1.1
+        id: run-analysis
+        with:
+          cmakeBuildDirectory: ./Tests/headertest/out
+          buildConfiguration: Debug
+          ruleset: NativeRecommendedRules.ruleset
+
+      # Upload SARIF file to GitHub Code Scanning Alerts
+      - name: Upload SARIF to GitHub
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v3.29.5
+        with:
+          sarif_file: ${{ steps.run-analysis.outputs.sarif }}

@@ -1,0 +1,17 @@
+Diet Dr Camera's original code is licensed under the GNU General Public License,
+version 3 or (at your option) any later version, with the modding/linking permissions
+in EXCEPTIONS.md. See LICENSE.txt and LICENSING.md in the source download for full terms.
+
+You may use, copy, modify and redistribute GPL-covered code, including commercially,
+subject to the GPL. Preserve copyright/license notices, identify your changes, and
+provide the corresponding source for distributed binaries under the applicable GPL
+terms. No separate permission request is required for uses the license permits.
+
+Third-party components retain their own copyrights and license terms; see CREDITS.txt,
+THIRD-PARTY-NOTICES.txt and licenses/. This release includes third-party open-source
+components and adaptations used under those licenses. These notes do not grant rights
+to Bethesda's game assets or replace any separate third-party license.
+
+The matching source is available as Diet Dr Camera - Source-1.0.0.zip in the Files
+section of this same mod page. It is not required to play. Ordinary independently
+authored camera presets do not inherit the plugin's GPL merely by being used with DDC.

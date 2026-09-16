@@ -1,0 +1,15 @@
+DIET DR CAMERA 1.0.0
+
+Read UPLOAD INSTRUCTIONS.txt for the complete Nexus upload steps.
+Main ZIP: Diet Dr Camera-1.0.0.zip
+Source ZIP: Diet Dr Camera - Source-1.0.0.zip
+
+Requirements and Full Credits are provided as plain text and Nexus BBCode.
+Description - Nexus BBCode.txt combines the ready-to-paste page text.
+Permissions.txt contains the license text for the Nexus permissions notes.
+Choose your thumbnail and gameplay images when preparing the page.
+
+The tested build is installed in the enabled MO2 mod Diet Dr Camera-1.0.0.
+Mysticism projectile tracing was accepted on Skyrim 1.6.1170 on September 13.
+Automated checks and remaining gameplay coverage are documented in
+RELEASE-CHECKLIST.md and RUNTIME-SUPPORT.md in the source archive.

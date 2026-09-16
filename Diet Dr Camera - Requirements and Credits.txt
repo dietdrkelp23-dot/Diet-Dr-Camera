@@ -1,0 +1,102 @@
+DIET DR CAMERA 1.0.0
+
+A camera overhaul for Skyrim with per-state third-person framing, first-person
+FOV and effects, dialogue/menu cameras, and shareable presets. Configuration
+uses SKSE Menu Framework. No ESP or Papyrus scripts are included.
+
+RUNTIME
+
+One Windows x64 DLL targets the known Skyrim SE and AE releases through 1.7.104,
+including 1.5.97 and GOG 1.6.659/1.6.1179. VR is excluded. SKSE does not support
+the Microsoft Store/Game Pass or Epic builds.
+Runtime-specific accessors handle engine layouts. Instruction hooks are decoded
+and checked before installation. Unknown future executables are refused.
+See RUNTIME-SUPPORT.md for the exact targets and the remaining in-game test matrix.
+
+REQUIREMENTS
+
+1. SKSE64 matching your installed Skyrim runtime.
+   https://skse.silverlock.org/
+2. Address Library for SKSE Plugins, by meh321, matching your runtime.
+   Use the SE package for 1.5, AE for 1.6/1.7; 1.7 requires format 5 support.
+   https://www.nexusmods.com/skyrimspecialedition/mods/32444
+3. SKSE Menu Framework 3, by Erruptive/QTR-Modding.
+   Required for the in-game configuration interface.
+   https://www.nexusmods.com/skyrimspecialedition/mods/120352
+   Install the framework's own requirements too, including ImGui Icons for its
+   gamepad prompts: https://www.nexusmods.com/skyrimspecialedition/mods/114790
+4. Microsoft Visual C++ x64 runtime required by SKSE/native C++ plugins.
+   https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
+
+OPTIONAL
+
+True Directional Movement, by Ersh: target-lock and yaw-control integration.
+  https://www.nexusmods.com/skyrimspecialedition/mods/51614
+Open Animation Replacer, by Ersh: identifies active replacement animations
+for animation camera profiles. Without it, raw animation paths are used.
+  https://www.nexusmods.com/skyrimspecialedition/mods/92109
+
+INSTALLATION
+
+MO2 / Vortex: install the main ZIP as a mod. Its root is the game's Data layout.
+Manual: extract the ZIP INTO your Skyrim Data folder. The resulting DLL path is
+  Data/SKSE/Plugins/DietDrCamera.dll
+The archive also contains meshes/actors/character/animations/staggercamera.hkx,
+an empty override that disables vanilla third-person camera-stagger lurch.
+
+Launch through SKSE. Open SKSE Menu Framework with its configured shortcut
+(upstream default: F1), then choose Diet Dr Camera. If you rebound the framework
+shortcut, use your own binding. Set a Quick Tune shortcut in DDC if desired.
+
+SAVING AND UPDATING
+
+Camera edits persist when you Save or Update a named preset in the Presets panel.
+Presets live at Data/SKSE/Plugins/DietDrCamera/Presets/*.toml. Global preferences
+store hotkeys and the selected preset. MO2 may redirect writes into its overwrite
+or configured output mod; check there when backing up your settings.
+
+This ZIP contains no personal TOML files, generated defaults, or automatically
+selected preset. The public compatibility contract starts with presets saved by
+the 1.0 release; earlier development files are outside that contract. Future DDC
+updates must retain the tuning and default values used by 1.0 presets. A preset
+from an unsupported newer format is refused without replacing your settings or
+overwriting its file. See PRESET-AUTHORS.md for sharing and customizing presets.
+Disable the mod in your manager to uninstall; retain a backup of your presets.
+
+COMPATIBILITY AND KNOWN ISSUES
+
+- SmoothCam owns overlapping third-person camera behavior. DDC skips certain
+  projectile patches when SmoothCam is detected, but that is not full camera
+  compatibility. Use one third-person camera overhaul.
+- Improved Camera SE / SE-NG: DDC has specific first-person FOV handling and hides
+  the affected controls. This does not guarantee every feature combination.
+- doodlum's Camera Noise SE: choose one noise implementation; both modify the
+  camera root and their effects can stack or conflict.
+- Other dialogue, death-camera, or unpaused-menu mods can own the same hooks.
+  Check those combinations separately.
+- Mysticism projectile tracing was confirmed working on Skyrim 1.6.1170 on
+  September 13, 2026. Other runtime gameplay coverage is documented in the
+  source archive's RUNTIME-SUPPORT.md.
+- An earlier intermittent movement-stall report around werewolf combat, target
+  lock and menus has guarded recovery; complete resolution has not been verified.
+- The author accepted the reported chained Whirlwind Sprint/Flee Framing retest
+  on September 14. RELEASE-CHECKLIST.md records the remaining manual coverage.
+
+SUPPORT
+
+Provide Skyrim and SKSE versions, the mod version, exact reproduction steps,
+DietDrCamera.log from the SKSE logs directory, and a CrashLogger log if present.
+Enable Verbose Logging in DDC only when collecting detailed diagnostic captures.
+Matching PDB symbols are retained by the developer for crash-report analysis.
+
+CREDITS
+
+See CREDITS.txt, THIRD-PARTY-NOTICES.txt, and licenses/ in the Source ZIP for
+acknowledgements and third-party license texts. Dependency plugin binaries are not bundled.
+
+LICENSE AND SOURCE
+
+DDC is GPL-3.0-or-later with modding/linking permissions; see LICENSE.txt,
+LICENSING.md and EXCEPTIONS.md. The matching editable code is the separate
+Diet Dr Camera - Source-1.0.0.zip download on the same mod page. Players only
+need the main ZIP. Source access and license notices must accompany redistribution.

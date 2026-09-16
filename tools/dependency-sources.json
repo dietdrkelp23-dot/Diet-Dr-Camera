@@ -1,0 +1,167 @@
+{
+  "baseline": "2b65c20fc66eda893aa15a15a453c3cf09500b19",
+  "dependencies": [
+    {
+      "name": "fmt",
+      "version": "12.1.0",
+      "recipeTree": "936231a2c765082457d348a8781ea9d3610eb331",
+      "archive": "fmtlib-fmt-12.1.0.tar.gz",
+      "url": "https://github.com/fmtlib/fmt/archive/12.1.0.tar.gz",
+      "sha512": "f0da82c545b01692e9fd30fdfb613dbb8dd9716983dcd0ff19ac2a8d36f74beb5540ef38072fdecc1e34191b3682a8542ecbf3a61ef287dbba0a2679d4e023f2",
+      "recipeFiles": [
+        {
+          "path": "portfile.cmake",
+          "sha256": "4a1a39b9362c963ad53915f8e9326887aa70b20709b6805fcbc9aaeb086f1b35"
+        },
+        {
+          "path": "usage",
+          "sha256": "ece096518c58df58cfc60f5ad8120d248a86383482455f539d91b8ca6eac14a7"
+        },
+        {
+          "path": "vcpkg.json",
+          "sha256": "56643eba77a1084e3b9a6dea7a13449a4b94c2760c9da46aa8b33aef5ccf2aad"
+        }
+      ]
+    },
+    {
+      "name": "spdlog",
+      "version": "1.17.0",
+      "recipeTree": "7971db787034aef4204ace90e0f94fdbab808f75",
+      "archive": "gabime-spdlog-v1.17.0.tar.gz",
+      "url": "https://github.com/gabime/spdlog/archive/v1.17.0.tar.gz",
+      "sha512": "8df117055d19ff21c9c9951881c7bdf27cc0866ea3a4aa0614b2c3939cedceab94ac9abaa63dc4312b51562b27d708cb2f014c68c603fd1c1051d3ed5c1c3087",
+      "recipeFiles": [
+        {
+          "path": "portfile.cmake",
+          "sha256": "9ff296b1f20b541dc4030e5edfa084e01a37c431272e9d297fc47623e6c8234f"
+        },
+        {
+          "path": "usage",
+          "sha256": "bdc67ce7fb7be263e7fdf3c57815f8f9f6142aca5d8f4da5e5597f25a6163bc6"
+        },
+        {
+          "path": "vcpkg.json",
+          "sha256": "a7d6c7fe6a0dccb163857326c421a68e0fed8dd6262f12b6460bbaee2b9c5901"
+        }
+      ]
+    },
+    {
+      "name": "tomlplusplus",
+      "version": "3.4.0#1",
+      "recipeTree": "c89c408f778aebf69ac0bbbb3d19db57c97d664c",
+      "archive": "marzer-tomlplusplus-v3.4.0.tar.gz",
+      "url": "https://github.com/marzer/tomlplusplus/archive/v3.4.0.tar.gz",
+      "sha512": "c227fc8147c9459b29ad24002aaf6ab2c42fac22ea04c1c52b283a0172581ccd4527b33c1931e0ef0d1db6b6a53f9e9882c6d4231c7f3494cf070d0220741aa5",
+      "recipeFiles": [
+        {
+          "path": "fix-android-fileapi.patch",
+          "sha256": "173233e3ecb9704ee9799017b6d3498237a7456d15aba3abe26f355f174d6f36"
+        },
+        {
+          "path": "portfile.cmake",
+          "sha256": "5600077e248f3b60eb937e52f9d933063b06e0a048a703541cb55da4c0051359"
+        },
+        {
+          "path": "vcpkg.json",
+          "sha256": "93eeeff78abb580846ff69bfa4507895f7e4afecd7f0740075227315501df49d"
+        }
+      ]
+    },
+    {
+      "name": "nlohmann-json",
+      "version": "3.12.0#2",
+      "recipeTree": "ac3b8821cf486e45dd543bef2a4ba1d1ba230258",
+      "archive": "nlohmann-json-v3.12.0.tar.gz",
+      "url": "https://github.com/nlohmann/json/archive/v3.12.0.tar.gz",
+      "sha512": "6cc1e86261f8fac21cc17a33da3b6b3c3cd5c116755651642af3c9e99bb3538fd42c1bd50397a77c8fb6821bc62d90e6b91bcdde77a78f58f2416c62fc53b97d",
+      "recipeFiles": [
+        {
+          "path": "fix-4736_char8_t.patch",
+          "sha256": "4c0177c5b4c4fb0978b54e2e113d2c76865059a85aa1b060b87f441056813fde"
+        },
+        {
+          "path": "fix-4742_std_optional.patch",
+          "sha256": "218c2182366f1e9b997fc81f1b27b951a1438a3578f8e0cb22a1957cc326ccbd"
+        },
+        {
+          "path": "portfile.cmake",
+          "sha256": "9bae6425097eb8d78e6f9a213de5258a3dfac57056e4c42e76a3a8d805fbdc1b"
+        },
+        {
+          "path": "usage",
+          "sha256": "ec6460d4688d7908d8adc698700f77639013641f1ab27066e9324c9ca11276c3"
+        },
+        {
+          "path": "vcpkg.json",
+          "sha256": "b576fa660ad7fcd9aa0324cc775b596d48aa7f14c993f63b23865a8673835310"
+        }
+      ]
+    },
+    {
+      "name": "rapidcsv",
+      "version": "8.92",
+      "recipeTree": "1642c210ec8afae04ff4657b25887ae64d4d35e3",
+      "archive": "d99kris-rapidcsv-v8.92.tar.gz",
+      "url": "https://github.com/d99kris/rapidcsv/archive/v8.92.tar.gz",
+      "sha512": "85041cfb88bf3c8cfa518c80feb087b52a611a10ebc0b3e3289850d96a9c44519e219af7abdd4509746aff5d54271b505f96f0d2b0d2c5cc05f57b671c8ea8a4",
+      "recipeFiles": [
+        {
+          "path": "portfile.cmake",
+          "sha256": "0d03c4fbba2a1dfb65b216ae1a12f05b9fadfc34838581b76e7e27b6937f56d8"
+        },
+        {
+          "path": "vcpkg.json",
+          "sha256": "6a63f1ea4af1979c0703362be4c0cadefee2bb1f06362db34df7e628d10921d1"
+        }
+      ]
+    },
+    {
+      "name": "directxmath",
+      "version": "2026-05-15",
+      "recipeTree": "5998073a9a3f096e60f6c23c12cf98497333179c",
+      "archive": "Microsoft-DirectXMath-may2026.tar.gz",
+      "url": "https://github.com/Microsoft/DirectXMath/archive/may2026.tar.gz",
+      "sha512": "e10b6e0351bb3de10f6e6d99222d1e3f9fadb20435a86875f679e32e6fe46c98e7c503fcdf179445bab87676248cd33d3f113087ed50a3c8269e432a7e2cc293",
+      "recipeFiles": [
+        {
+          "path": "portfile.cmake",
+          "sha256": "7e81e4e7e0b69f54214f6fa8c3af13279785241b055b08cace24f8a4c3b72410"
+        },
+        {
+          "path": "shmathusage",
+          "sha256": "cca5652f8777e277d1c9fd47fdd49b134c289964bfbb74ad41111dfc76fd0a4f"
+        },
+        {
+          "path": "usage",
+          "sha256": "5c4fc359847a72a252b8dabb06a398fd83dd19764b52fb08a2bf5f72bb9784cd"
+        },
+        {
+          "path": "vcpkg.json",
+          "sha256": "6344574ca7557b735d1a4ab88481e9e51c9d9e1d82d070936a8d5067e7a86306"
+        }
+      ]
+    },
+    {
+      "name": "directxtk",
+      "version": "2026-05-07#1",
+      "recipeTree": "2bd837ddca7efd128c2db51fe75993737c92451c",
+      "archive": "Microsoft-DirectXTK-may2026.tar.gz",
+      "url": "https://github.com/Microsoft/DirectXTK/archive/may2026.tar.gz",
+      "sha512": "9306774b06f52b4c37938fe4b3a10df8c7a85652188a25dc25e60ae9ff6fbf9d2cf920b114de3fc3945c564054cbb166cc45fca073021129e75ce282a51636e7",
+      "recipeFiles": [
+        {
+          "path": "portfile.cmake",
+          "sha256": "3cc6721b054b279746781aad2f1baa27135927299da5a03231f1ad4e94e00bd2"
+        },
+        {
+          "path": "usage",
+          "sha256": "3f0c94d03e69c2295fcd4f08b5bdb047ea0da0676de0168f83019de83c47b193"
+        },
+        {
+          "path": "vcpkg.json",
+          "sha256": "0b9be6ed18293e57fa4ef7d5e113693d2a0863328dc96cbbfa50485c0f5f9d98"
+        }
+      ]
+    }
+  ]
+}

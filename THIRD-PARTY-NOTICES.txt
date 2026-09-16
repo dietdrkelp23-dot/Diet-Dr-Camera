@@ -1,0 +1,59 @@
+Diet Dr Camera - third-party notices
+
+Full notices from the exact installed dependency packages are in licenses/ in
+the source archive and reproduced in the DLL's license-notice resource:
+  CommonLibSSE-NG v7.5.4 - GPL-3.0-or-later with Modding and Linking Exceptions;
+    Ryan-rsm-McKenzie, alandtse, CharmedBaryon and contributors.
+    Commit c5424463bba9af0d75cde8640ba7ddd4cacb9e39.
+    GPL text and exceptions are included; legacy MIT attribution is retained.
+    https://github.com/alandtse/CommonLibSSE-NG/tree/v7.5.4
+  MinHook v1.3.4 hde64 decoder - BSD-style notices; Tsuda Kageyu,
+    Vyacheslav Patkov and contributors. Only the instruction decoder is used.
+  DirectXTK and DirectXMath - MIT; Microsoft Corporation.
+  fmt - MIT; Victor Zverovich and contributors.
+  spdlog - MIT and included third-party notices; Gabi Melman and contributors.
+  toml++ - MIT and included third-party notices; Mark Gillard and contributors.
+  nlohmann/json - MIT and included third-party notices; Niels Lohmann and contributors.
+  rapidcsv - BSD 3-Clause; Kristofer Berggren.
+
+SKSE Menu Framework's API is used to call the separately installed framework.
+Its upstream API license is LGPL 2.1 (licenses/SKSE-Menu-Framework-API.txt).
+The exact interface header used by this build is included as
+include/UI/SKSEMenuFramework.h in the corresponding source ZIP.
+Framework API upstream: https://github.com/QTR-Modding/SKSE-Menu-Framework-3-API
+Framework application: https://github.com/QTR-Modding/SKSE-Menu-Framework-3
+Dear ImGui rendering is provided by the separately installed framework.
+
+True Directional Movement and Open Animation Replacer are optional external mods
+by Ersh. DDC uses their public interfaces; their plugin binaries are not bundled.
+API headers retain their upstream attribution in the corresponding source ZIP:
+  https://github.com/ersh1/TrueDirectionalMovement
+  https://github.com/ersh1/OpenAnimationReplacer
+
+The minimal Perlin1D implementation in include/vendor/PerlinNoise.hpp carries
+its existing public-domain attribution. The empty staggercamera.hkx is a loose
+asset used to disable the vanilla third-person camera stagger animation.
+
+Adapted code and interfaces:
+  Skyrim Souls RE - MIT; SniffleMan, Vermunds and contributors.
+    Unpaused-menu and menu-cache adaptations; licenses/SkyrimSoulsRE.txt.
+  Dialogue Movement Enabler / SkyrimSE-Mods - MIT; Vermunds.
+    Dialogue input relabel approach; licenses/DialogueMovementEnabler.txt.
+  No Furniture Camera - GPL-3.0; Ersh and contributors.
+    Furniture-camera suppression adaptation; licenses/NoFurnitureCamera.txt.
+  Camera Noise SE - MIT; upstream notice names Ryan-rsm-McKenzie.
+    doodlum's camera overlay and hook reference; licenses/CameraNoiseSE.txt.
+  True Directional Movement / Open Animation Replacer - GPL-3.0 repositories;
+    Ersh and contributors. Their COPYING texts accompany the local API headers
+    in licenses/TrueDirectionalMovement.txt and licenses/OpenAnimationReplacer.txt.
+    DDC's OAR integration combines and adapts the public interface source.
+
+The corresponding source ZIP includes the exact sources of fmt, spdlog, toml++,
+nlohmann/json, rapidcsv, DirectXMath and DirectXTK in dependency-sources/. Their
+source hashes match the installed vcpkg package metadata. The pinned vcpkg recipes
+and patches are in tools/dependency-recipes/ and retain vcpkg's MIT license.
+
+DDC's original code is GPL-3.0-or-later with the additional permissions described
+in LICENSING.md and EXCEPTIONS.md in the corresponding source. Third-party code
+retains its upstream terms; the original-code grant does not relicense it.
+See CREDITS.txt in the source or the mod page for acknowledgements.

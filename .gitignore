@@ -1,0 +1,12 @@
+/build/
+/out/
+/release/
+/cmake-build-*/
+/vcpkg_installed/
+/.vs/
+/.cache/
+/.cmake/
+__pycache__/
+*.py[cod]
+*.user
+*.suo
