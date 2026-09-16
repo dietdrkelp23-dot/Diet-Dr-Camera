@@ -78,15 +78,19 @@ try {
               'RELEASE-CHECKLIST.md', 'REQUIREMENTS.txt', 'CREDITS.txt', 'THIRD-PARTY-NOTICES.txt',
               'Diet Dr Camera - Requirements and Credits.txt')
     $hasGit = (Test-Path -LiteralPath (Join-Path $repo '.git')) -and ($null -ne (Get-Command git -ErrorAction SilentlyContinue))
+    $hasVendorGit = $hasGit -and (Test-Path -LiteralPath (Join-Path $repo 'extern/CommonLibSSE-NG/.git'))
     if ($hasGit) {
         $paths = @(& git -c core.quotepath=false ls-files --cached --others --exclude-standard -- @roots @docs |
             Sort-Object -Unique | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
         if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate the working source.' }
-        # Git reports the bundled CommonLib as a gitlink, not its source files.
-        $vendorPaths = @(& git -C extern/CommonLibSSE-NG -c core.quotepath=false ls-files --cached --others --exclude-standard)
-        if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate bundled CommonLib source.' }
-        $paths += @($vendorPaths | ForEach-Object { 'extern/CommonLibSSE-NG/' + $_ } |
-            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+        # Development uses a gitlink; the public repository tracks the vendor
+        # files directly. Never mistake the parent repository for vendor Git.
+        if ($hasVendorGit) {
+            $vendorPaths = @(& git -C extern/CommonLibSSE-NG -c core.quotepath=false ls-files --cached --others --exclude-standard)
+            if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate bundled CommonLib source.' }
+            $paths += @($vendorPaths | ForEach-Object { 'extern/CommonLibSSE-NG/' + $_ } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+        }
         $paths = @($paths | Sort-Object -Unique)
     } else {
         # The distributed source ZIP has no Git metadata; it can still rebuild/package.
@@ -171,6 +175,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Could not record Git revision.' }
         $status = @(& git status --short -- @roots @docs)
         if ($LASTEXITCODE -ne 0) { throw 'Could not record working tree changes.' }
+    }
+    if ($hasVendorGit) {
         $vendorRevision = & git -C extern/CommonLibSSE-NG rev-parse HEAD
         if ($LASTEXITCODE -ne 0) { throw 'Could not record CommonLib revision.' }
         $vendorStatus = @(& git -C extern/CommonLibSSE-NG status --short)
@@ -182,6 +188,7 @@ try {
         createdUtc = [DateTime]::UtcNow.ToString('o'); baseCommit = $revision;
         sourceIncludesWorkingChanges = ($status.Count -gt 0); workingChanges = $status;
         commonLibCommit = $vendorRevision; commonLibWorkingChanges = $vendorStatus;
+        commonLibSourceMode = $(if ($hasVendorGit) { 'vendor-git' } else { 'bundled-files; see sourceFiles hashes and documented pin' });
         binaryCheck = $binaryCheck; files = $records; sourceFiles = $sourceRecords;
         archives = @($mainZip, $sourceZip | ForEach-Object {
             [ordered]@{ name = [IO.Path]::GetFileName($_); sha256 = (Get-FileHash -LiteralPath $_).Hash }

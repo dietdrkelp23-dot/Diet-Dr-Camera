@@ -4,8 +4,9 @@ This repository starts from the complete source archive supplied with version
 1.0.0. All 5,159 original source/archive files were checked against that archive
 before preparing the repository. The only changes for GitHub preparation are
 additional build/provenance documentation, an ignore file, the README's build
-instructions, and the packager's allowlist so these documents remain in future
-source exports. The plugin implementation and dependencies are unchanged.
+instructions, and packaging metadata. The packager retains these documents in
+source exports and correctly identifies bundled vendor files without Git metadata.
+The plugin implementation and dependencies are unchanged.
 
 The recorded release artifacts are:
 
