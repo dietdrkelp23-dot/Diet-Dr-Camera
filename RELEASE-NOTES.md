@@ -1,3 +1,13 @@
+# Diet Dr Camera 1.1.1
+
+- Whole-tab copying now treats the Sheathed and Unsheathed base rows as matching
+  settings in either direction. This applies to Third Person, Target Lock,
+  Camera Noise and First Person tabs. Each environment keeps its own values;
+  other sub-states still match by name. Distinct transformation states remain
+  separate. Matching entries retain the existing nested-override copying.
+- Regression checks cover both directions, reordered rows, indoor/outdoor
+  separation, unmatched entries and ambiguous identities.
+
 # Diet Dr Camera 1.1.0
 
 Adds direct numeric editing, whole-tab copying, Target Lock Pitch Bias,

@@ -30,12 +30,12 @@ If using a development checkout whose CommonLib is a submodule, run
 `git submodule update --init --recursive` first. The complete public source
 archive and the prepared public repository already contain its source files.
 
-For the tagged 1.1.0 source:
+For the tagged 1.1.1 source:
 
 ```powershell
 git clone https://github.com/dietdrkelp23-dot/Diet-Dr-Camera.git C:\src\Diet-Dr-Camera
 Set-Location C:\src\Diet-Dr-Camera
-git checkout v1.1.0
+git checkout v1.1.1
 ```
 
 Set up vcpkg once, outside the project:

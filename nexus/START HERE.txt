@@ -1,17 +1,18 @@
-DIET DR CAMERA 1.1.0
+DIET DR CAMERA 1.1.1
 
 Update the existing mod page; do not create a second page:
 https://www.nexusmods.com/skyrimspecialedition/mods/191847
 
 Main ZIP: Desktop/Diet Dr Camera - Mod/Diet Dr Camera.zip
 Source ZIP: Desktop/Diet Dr Camera - Source/Diet Dr Camera - Source.zip
-Enter version 1.1.0 for both files. Upload the ZIPs directly.
+Enter version 1.1.1 for both files. Upload the ZIPs directly.
 
 Read UPLOAD INSTRUCTIONS.txt for the exact update steps.
-CHANGELOG-1.1.0.txt is ready to paste into the version changelog.
+CHANGELOG-1.1.1.txt is ready to paste into the version changelog.
 SECURITY-REVIEW.txt explains the follow-up to Dominic's support ticket.
 Description - Nexus BBCode.txt includes source/build links and updated features.
 
-The author approved the update on September 15, 2026. The prepared DLL is the
-same code as the final main-list test build. RELEASE-CHECKLIST.md and
-RUNTIME-TESTING.md distinguish confirmed coverage from remaining combinations.
+This 1.1.1 package includes the additional Sheathed/Unsheathed tab-copy fix.
+It supersedes the prepared 1.1.0 upload. Automated checks cover both directions;
+an additional in-game paste check has not been recorded. RELEASE-CHECKLIST.md
+and RUNTIME-TESTING.md distinguish confirmed coverage from remaining combinations.

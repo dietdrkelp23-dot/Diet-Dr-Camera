@@ -1,11 +1,20 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace DietDrCamera
 {
+    // These labels describe the equivalent base row in different category tabs.
+    // Keep full transformation names and every other sub-state distinct.
+    inline std::string MakeTabEntryKey(std::string_view label, int environment)
+    {
+        if (label == "Sheathed") label = "Unsheathed";
+        return std::string(label) + "/" + std::to_string(environment);
+    }
+
     // Location lists can be reordered by loading another preset after Copy.
     // Rewrite every captured index through stable identity matches; -1 skips a
     // missing or ambiguous place rather than applying its tuning elsewhere.

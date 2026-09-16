@@ -57,6 +57,45 @@ int main()
             "Tab paste mixed environments or matched unrelated sub-states by position");
         Require(MatchTabEntries({"same", "same"}, {"same"}).empty() &&
             MatchTabEntries({"same"}, {"same", "same"}).empty(), "Ambiguous tab entries must not be pasted");
+
+        // All tab builders use the same identity helper. Copy the base row
+        // between Sheathed and weapon tabs, keeping each environment separate
+        // even when the destination lists its rows in a different order.
+        const auto tabKeys = [](const char* base, const char* extra) {
+            return std::vector<std::string>{MakeTabEntryKey(base, 0), MakeTabEntryKey(base, 1),
+                MakeTabEntryKey("Sprinting", 0), MakeTabEntryKey(extra, 0)};
+        };
+        for (const bool fromSheathed : {true, false}) {
+            const auto from = tabKeys(fromSheathed ? "Sheathed" : "Unsheathed", "Swimming");
+            const std::vector<std::string> to{
+                MakeTabEntryKey("Sprinting", 0),
+                MakeTabEntryKey(fromSheathed ? "Unsheathed" : "Sheathed", 1),
+                MakeTabEntryKey("Power Attack", 0),
+                MakeTabEntryKey(fromSheathed ? "Unsheathed" : "Sheathed", 0)};
+            const auto matched = MatchTabEntries(from, to);
+            Require(matched == std::vector<std::pair<std::size_t, std::size_t>>{{2,0},{1,1},{0,3}},
+                "Sheathed/Unsheathed tab paste skipped the base row or mixed states/environments");
+            const std::array<CameraProfile, 4> copied{
+                TunedProfile(11.0f), TunedProfile(22.0f), TunedProfile(33.0f), TunedProfile(44.0f)};
+            std::array<CameraProfile, 4> pasted{};
+            for (const auto& [sourceIndex, destinationIndex] : matched)
+                pasted[destinationIndex] = copied[sourceIndex];
+            RequireProfile(pasted[0], copied[2]);
+            RequireProfile(pasted[1], copied[1]);
+            RequireProfile(pasted[2], CameraProfile{});
+            RequireProfile(pasted[3], copied[0]);
+        }
+        const auto sheathed = MakeTabEntryKey("Sheathed", 0);
+        const auto unsheathed = MakeTabEntryKey("Unsheathed", 0);
+        Require(MatchTabEntries({sheathed, unsheathed}, {sheathed}).empty() &&
+            MatchTabEntries({sheathed}, {sheathed, unsheathed}).empty(),
+            "Equivalent base labels must still reject ambiguous tab rows");
+        Require(MatchTabEntries({MakeTabEntryKey("Werewolf Sheathed", 0),
+                MakeTabEntryKey("Vampire Lord Sheathed (Ground)", 0)},
+            {MakeTabEntryKey("Werewolf Unsheathed", 0),
+                MakeTabEntryKey("Vampire Lord Unsheathed (Ground)", 0)}).empty(),
+            "Tab base aliases merged distinct transformation states");
+
         struct LocationSlot { int locIdx; float tuning; };
         std::vector<LocationSlot> locations{{0, 12.0f}, {1, 24.0f}, {2, 36.0f}, {-1, 48.0f}};
         RemapTabLocationSlots(locations, {2, -1, 0});
@@ -118,7 +157,7 @@ int main()
         Require(!owner.Attach(102, 0x4002, enable, otherFlag), "Later row replaced the selected enable flag");
         *enable = true;
         Require(selectedEnabled && !otherEnabled, "Paste enabled the wrong row");
-        std::cout << "PASS enemy button and row copy/paste ownership, profile snapshot, "
+        std::cout << "PASS bidirectional Sheathed/Unsheathed tab paste, enemy button and row copy/paste ownership, profile snapshot, "
                      "environment destination, untouched rows, and enable flags\n";
         return 0;
     } catch (const std::exception& error) {

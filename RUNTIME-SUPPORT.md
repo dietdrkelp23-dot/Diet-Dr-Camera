@@ -1,4 +1,9 @@
-# Runtime compatibility - 1.1.0
+# Runtime compatibility - 1.1.1
+
+Version 1.1.1 changes only whole-tab clipboard matching and release metadata.
+Runtime hooks and menu loading are unchanged from 1.1.0. The live evidence below
+identifies the earlier tested builds; no additional runtime launch is claimed
+for the clipboard patch.
 
 The author approved 1.1.0 for release on September 15, 2026. The original
 reported startup failure has not yet been reproduced with its exact mod setup.

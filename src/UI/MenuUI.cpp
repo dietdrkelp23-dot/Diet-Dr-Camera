@@ -3348,7 +3348,7 @@ namespace DietDrCamera
             child.tabEnvironment = environment;
             child.label = tab.label + " - " + key;
             child.owner = tab.owner;
-            tab.tabKeys.push_back(std::move(key) + "/" + std::to_string(environment));
+            tab.tabKeys.push_back(MakeTabEntryKey(key, environment));
             tab.tabEntries.push_back(std::move(child));
         }
 

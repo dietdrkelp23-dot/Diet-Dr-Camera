@@ -1,4 +1,4 @@
-DIET DR CAMERA 1.1.0 - NEXUS UPDATE DIRECTIONS
+DIET DR CAMERA 1.1.1 - NEXUS UPDATE DIRECTIONS
 
 1. OPEN THE EXISTING MOD PAGE
 
@@ -11,7 +11,7 @@ or uploads a file automatically.
 
 File: Desktop/Diet Dr Camera - Mod/Diet Dr Camera.zip
 Display name: Diet Dr Camera
-Version: 1.1.0
+Version: 1.1.1
 Category: Main files
 Description: Camera plugin update with startup compatibility fixes, direct
 numeric slider editing, whole-tab copy/paste, and Target Lock Pitch Bias.
@@ -22,20 +22,20 @@ Enable mod-manager downloads. Upload the ZIP itself, not its containing folder.
 
 File: Desktop/Diet Dr Camera - Source/Diet Dr Camera - Source.zip
 Display name: Diet Dr Camera - Source
-Version: 1.1.0
+Version: 1.1.1
 Category: Miscellaneous files
-Description: Full corresponding 1.1.0 source, bundled dependencies, pinned
+Description: Full corresponding 1.1.1 source, bundled dependencies, pinned
 recipes, tests, licenses and build instructions. For developers; not required
 for playing and not intended for installation through MO2/Vortex.
 Use manual download only, if the form offers that option.
 
 4. UPDATE THE PAGE
 
-Set the page version to 1.1.0 and paste CHANGELOG-1.1.0.txt as its changelog.
+Set the page version to 1.1.1 and paste CHANGELOG-1.1.1.txt as its changelog.
 The updated Description - Nexus BBCode.txt is available if you want to refresh
 the page text. At minimum, add these two links to the existing description:
-Source: https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.0
-Build: https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.0/BUILDING.md
+Source: https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.1
+Build: https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.1/BUILDING.md
 Keep existing requirements, credits, permissions and screenshots.
 
 Existing required mods: Address Library 32444, SKSE Menu Framework 120352,
@@ -48,7 +48,7 @@ Reply to Dominic in the existing Nexus support conversation using the draft
 and links in SECURITY-REVIEW.txt. Include the mod page link above.
 Keep the flagged 1.0 file available for staff to inspect while review is open;
 do not delete it to try to clear the warning. The old 1.0 source tag remains
-available alongside 1.1.0. Uploading a new version does not itself complete
+available alongside 1.1.1. Uploading a new version does not itself complete
 the staff review or guarantee a change to the security badge.
 
 Do not upload PDBs, manifests, test logs, source folders or private runtime

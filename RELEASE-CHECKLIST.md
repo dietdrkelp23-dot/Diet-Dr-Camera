@@ -1,4 +1,18 @@
-# Release verification - 1.1.0
+# Release verification - 1.1.1
+
+This patch corrects whole-tab matching between the Sheathed and Unsheathed base
+rows after the author reported the omission. Automated clipboard checks cover
+both directions, environment separation, preserved profile/transition values,
+unmatched states and ambiguous identities. The standard packaging script runs
+all standalone checks and verifies the DLL, PDB, source and archive hashes;
+the resulting manifest and logs record the exact patch artifacts.
+
+The runtime-hook and menu-loading code is unchanged from 1.1.0. The live results
+below belong to the identified earlier builds; this patch has not received an
+additional in-game tab-paste test. The public source build verification and
+release hashes are recorded in the tagged SOURCE-PROVENANCE.md.
+
+## Previous release verification - 1.1.0
 
 The author approved this update for distribution on September 15, 2026 after
 testing in the normal Skyrim 1.6.1170 mod list. It includes typed slider values,

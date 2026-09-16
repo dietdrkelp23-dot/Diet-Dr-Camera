@@ -2,7 +2,7 @@ NEXUS SECURITY REVIEW - WHAT TO SEND
 
 Reply in the existing conversation with Dominic. The full source and detailed
 build instructions he requested are public. Include BOTH versions: the 1.0
-file originally flagged and the 1.1.0 update. SOURCE-PROVENANCE.md associates
+file originally flagged and the 1.1.1 update. SOURCE-PROVENANCE.md associates
 the corresponding archives and DLLs with their SHA-256 hashes.
 
 Copy the message below. It is a draft; it has not been sent.
@@ -19,12 +19,12 @@ https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.0.0-source.1
 1.0.0 build instructions:
 https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.0.0-source.1/BUILDING.md
 
-Version 1.1.0 update source:
-https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.0
-1.1.0 build instructions:
-https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.0/BUILDING.md
-1.1.0 artifact hashes and source provenance:
-https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.0/SOURCE-PROVENANCE.md
+Version 1.1.1 update source:
+https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.1
+1.1.1 build instructions:
+https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.1/BUILDING.md
+1.1.1 artifact hashes and source provenance:
+https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.1/SOURCE-PROVENANCE.md
 
 The repository includes the plugin source, bundled dependency sources, pinned
 dependency recipes, tests and license notices. Skyrim is not required to compile

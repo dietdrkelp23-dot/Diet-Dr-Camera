@@ -1,4 +1,4 @@
-DIET DR CAMERA 1.1.0
+DIET DR CAMERA 1.1.1
 
 A camera overhaul for Skyrim with per-state third-person framing, first-person
 FOV and effects, dialogue/menu cameras, and shareable presets. Configuration

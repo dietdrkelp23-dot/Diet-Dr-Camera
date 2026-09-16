@@ -17,12 +17,12 @@ Configure the camera in game through SKSE Menu Framework and Quick Tune.
 [*]Horseback Drawing/Zoomed profiles and stabilized mounted target tracking.
 [*]Ritual staff entries for mod-added spells across all five schools, including sneaking and target lock.
 [*]Separate indoor/outdoor collision options for ground, doors, trees and walls.
-[*]Preset saving, sharing, whole-tab copy/paste and controller navigation.
+[*]Preset saving, sharing, whole-tab copy/paste and controller navigation. Sheathed and Unsheathed base rows copy in either direction.
 [*]Click slider values to type exact numbers, with immediate yellow selection.
 [*]Per-entry Target Lock Pitch Bias adjusts upward/downward pitch as enemies approach.
 [/list]
 
-[b]DIET DR CAMERA 1.1.0 - REQUIREMENTS[/b]
+[b]DIET DR CAMERA 1.1.1 - REQUIREMENTS[/b]
 
 Windows x64, Skyrim Special Edition / Anniversary Edition.
 One DLL targets the known SE/AE executable versions listed in RUNTIME-SUPPORT.md,
@@ -67,7 +67,7 @@ Without it, animation profiles use raw animation paths.
 
 [b]INSTALLATION[/b]
 
-Install Diet Dr Camera-1.1.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
+Install Diet Dr Camera-1.1.1.zip with MO2 or Vortex, enable it, and launch via SKSE.
 Open SKSE Menu Framework with its configured shortcut (upstream default F1),
 then select Diet Dr Camera. Save your tuning to a named preset in the Presets panel.
 The main archive contains only the DLL and the empty stagger-camera animation
@@ -105,10 +105,10 @@ must preserve existing tuning and defaults. See PRESET-AUTHORS.md before sharing
 presets on Nexus. Keep a backup of your personal presets when updating.
 
 [b]License and source[/b]
-[url=https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.0]Full versioned source on GitHub[/url]
-[url=https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.0/BUILDING.md]Build instructions[/url]
+[url=https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.1]Full versioned source on GitHub[/url]
+[url=https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.1/BUILDING.md]Build instructions[/url]
 GPL-3.0-or-later with modding/linking permissions; see LICENSING.md in the source download.
-The matching [b]Diet Dr Camera - Source-1.1.0.zip[/b] is in this page's Files section.
+The matching [b]Diet Dr Camera - Source-1.1.1.zip[/b] is in this page's Files section.
 It includes source, dependency sources, build recipes and tests. Players only need
 the main download. Third-party components retain their own terms.
 

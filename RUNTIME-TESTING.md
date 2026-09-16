@@ -1,5 +1,11 @@
 # Runtime testing and release evidence
 
+Version 1.1.1 fixes Sheathed/Unsheathed whole-tab matching. Its regression checks
+exercise both directions and environment separation. This patch changes no
+runtime-hook or menu-loading code and has not received an additional in-game
+tab-paste test. The live results and DLL hashes below describe 1.1.0 and its
+earlier candidates.
+
 The author approved version 1.1.0 for release on September 15, 2026 after
 testing in the normal 1.6.1170 mod list. The original reporter's exact runtime
 and mod combination remain unknown. A message ending in
@@ -76,7 +82,7 @@ Menu Framework version): selection and yellow rendering occur in the mouse-down
 frame, typing replaces the selection, Enter/click-away commit, Escape cancels,
 and switching between rows preserves both edits. Main and Quick Tune widgets
 pass at 100%, 160% and 240% font scale. The author subsequently approved the
-release after main-list testing and the final UI refinements. The final DLL is
+release after main-list testing and the final UI refinements. The final 1.1.0 DLL is
 `5B3A303C9E3F7E900E2A06265411397131BFA18FCF276473AA4D89F5AC41D697`;
 the September 15 23:08-23:10 main-list log records 1.6.1170 loading the plugin,
 validating its hooks and entering gameplay. The isolated startup results above
