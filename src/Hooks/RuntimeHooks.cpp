@@ -14,12 +14,14 @@ namespace DietDrCamera::RuntimeHooks
         Sites sites{};
         bool prepared = false;
         std::array<std::uint8_t, 6> uiBranchBytes{};
+        std::string inspecting;
 
         [[noreturn]] void Fail(std::string_view detail)
         {
             const auto message = fmt::format("Diet Dr Camera cannot install its hooks on Skyrim {}: {}. "
                 "No gameplay should be started with this combination. See DietDrCamera.log.",
-                REL::Module::get().version().string(), detail);
+                REL::Module::get().version().string(), inspecting.empty() ? std::string(detail) :
+                    fmt::format("{} ({})", detail, inspecting));
             spdlog::critical("{}", message);
             SKSE::stl::report_and_fail(message);
         }
@@ -29,7 +31,8 @@ namespace DietDrCamera::RuntimeHooks
             DWORD64 imageBase = 0;
             const auto* entry = RtlLookupFunctionEntry(address, &imageBase, nullptr);
             if (!entry || imageBase != REL::Module::get().base() ||
-                imageBase + entry->BeginAddress != address || entry->EndAddress <= entry->BeginAddress ||
+                imageBase + entry->BeginAddress > address || imageBase + entry->EndAddress <= address ||
+                entry->EndAddress <= entry->BeginAddress ||
                 entry->EndAddress - entry->BeginAddress > 0x20000) Fail("invalid engine function boundaries");
             const auto rootBegin = [imageBase](const RUNTIME_FUNCTION* region) {
                 for (int depth = 0; depth < 16; ++depth) {
@@ -46,13 +49,20 @@ namespace DietDrCamera::RuntimeHooks
             // The dialogue update has five such regions on 1.6.1170.
             while (end - entry->BeginAddress < 0x20000) {
                 DWORD64 nextBase = 0;
-                const auto* next = RtlLookupFunctionEntry(imageBase + end, &nextBase, nullptr);
-                if (!next || nextBase != imageBase || next->BeginAddress != end || rootBegin(next) != root) break;
+                auto nextBegin = end;
+                const auto* next = RtlLookupFunctionEntry(imageBase + nextBegin, &nextBase, nullptr);
+                // Chained regions may be separated by compiler alignment padding.
+                while (!next && nextBegin - end < 15) {
+                    const auto byte = *reinterpret_cast<const std::uint8_t*>(imageBase + nextBegin);
+                    if (byte != 0xCC && byte != 0x90) break;
+                    next = RtlLookupFunctionEntry(imageBase + ++nextBegin, &nextBase, nullptr);
+                }
+                if (!next || nextBase != imageBase || next->BeginAddress != nextBegin || rootBegin(next) != root) break;
                 if (next->EndAddress <= end) Fail("invalid chained engine function boundaries");
                 end = next->EndAddress;
             }
             if (end - entry->BeginAddress > 0x20000) Fail("engine function exceeds scan limit");
-            return { reinterpret_cast<const std::uint8_t*>(address), end - entry->BeginAddress };
+            return { reinterpret_cast<const std::uint8_t*>(address), imageBase + end - address };
         }
 
         bool IsExecutable(std::uintptr_t address)
@@ -78,25 +88,33 @@ namespace DietDrCamera::RuntimeHooks
         {
             const auto address = caller.address();
             const auto target = callee.address();
-            const auto decoded = RuntimePatchInspection::Decode(Function(address), address);
-            if (!decoded) Fail(fmt::format("cannot decode {}", name));
-            auto offset = RuntimePatchInspection::UniqueCall(*decoded, target);
+            inspecting = fmt::format("{}, caller ID {}, callee ID {}", name, caller.id(), callee.id());
+            const auto code = Function(address);
+            spdlog::info("[Runtime] Inspecting {}: RVA 0x{:X}, {} bytes", inspecting,
+                address - REL::Module::get().base(), code.size());
+            std::optional<std::size_t> offset;
             // Established 1.5/1.6 sites may already be chained by another camera plugin.
             // Only accept an actual instruction boundary calling executable code outside Skyrim.
-            if (!offset && REL::Module::get().version() < SKSE::RUNTIME_SSE_1_7_99) {
+            if (REL::Module::get().version() < SKSE::RUNTIME_SSE_1_7_99) {
                 const auto legacy = REL::Module::IsAE() ? legacyAE : legacySE;
                 if (legacy) {
-                    for (const auto& instruction : *decoded) {
-                        if (instruction.offset != legacy || instruction.opcode != 0xE8 || instruction.length != 5) continue;
+                    if (const auto instruction = RuntimePatchInspection::CallAt(code, address, legacy)) {
                         MEMORY_BASIC_INFORMATION info{};
-                        if (IsExecutable(instruction.target) &&
-                            VirtualQuery(reinterpret_cast<const void*>(instruction.target), &info, sizeof(info)) &&
+                        if (instruction->target == target) {
+                            offset = legacy;
+                        } else if (IsExecutable(instruction->target) &&
+                            VirtualQuery(reinterpret_cast<const void*>(instruction->target), &info, sizeof(info)) &&
                             reinterpret_cast<std::uintptr_t>(info.AllocationBase) != REL::Module::get().base()) {
                             offset = legacy;
                             spdlog::info("[Runtime] {} chains another plugin at +0x{:X}", name, legacy);
                         }
                     }
                 }
+            }
+            if (!offset) {
+                const auto decoded = RuntimePatchInspection::Decode(code, address);
+                if (!decoded) Fail("cannot decode engine function");
+                offset = RuntimePatchInspection::UniqueCall(*decoded, target);
             }
             if (!offset) Fail(fmt::format("missing or ambiguous {} call", name));
             spdlog::info("[Runtime] {}: ID {} +0x{:X}", name, caller.id(), *offset);
@@ -113,21 +131,19 @@ namespace DietDrCamera::RuntimeHooks
         resolved.mainUpdate = FindCall("ScrapHeap::KeepPages", REL::RelocationID{35565, 36564}, REL::RelocationID{66889, 68150});
         const auto dialogue = REL::RelocationID(36540, 37541).address();
         const auto timerTarget = REL::RelocationID(38327, 39302).address();
+        inspecting = "dialogue close timer";
         const auto dialogueCode = Function(dialogue);
-        const auto timer = RuntimePatchInspection::DialogueTimerCall(dialogueCode, dialogue, timerTarget);
-        if (timer && IsEngineData(timer->multiplier, sizeof(float)) && *reinterpret_cast<const float*>(timer->multiplier) == -1.0f) {
-            resolved.dialogueTimer = dialogue + timer->offset;
-        } else if (REL::Module::get().version() < SKSE::RUNTIME_SSE_1_7_99) {
+        if (REL::Module::get().version() < SKSE::RUNTIME_SSE_1_7_99) {
             // SkyrimSoulsRE's SE 2.2.2 / AE ports establish these decrement sites.
             // Older compilers need not use the same SSE instruction for negation.
             const auto legacyOffset = REL::Module::IsAE() ? 0x6E8u : 0x4F9u;
-            if (const auto decoded = RuntimePatchInspection::Decode(dialogueCode, dialogue)) {
-                for (const auto& instruction : *decoded) {
-                    if (instruction.offset == legacyOffset && instruction.length == 5 &&
-                        instruction.opcode == 0xE8 && instruction.target == timerTarget)
-                        resolved.dialogueTimer = dialogue + legacyOffset;
-                }
-            }
+            if (const auto call = RuntimePatchInspection::CallAt(dialogueCode, dialogue, legacyOffset);
+                call && call->target == timerTarget) resolved.dialogueTimer = dialogue + legacyOffset;
+        }
+        if (!resolved.dialogueTimer) {
+            const auto timer = RuntimePatchInspection::DialogueTimerCall(dialogueCode, dialogue, timerTarget);
+            if (timer && IsEngineData(timer->multiplier, sizeof(float)) && *reinterpret_cast<const float*>(timer->multiplier) == -1.0f)
+                resolved.dialogueTimer = dialogue + timer->offset;
         }
         if (!resolved.dialogueTimer) Fail("unrecognized dialogue timer decrement");
         spdlog::info("[Runtime] dialogue close timer: +0x{:X}", resolved.dialogueTimer - dialogue);
@@ -135,6 +151,7 @@ namespace DietDrCamera::RuntimeHooks
         resolved.advanceMovies = REL::RelocationID(79946, 82083).address();
         resolved.getConsole = REL::RelocationID(52063, 52950).address();
         const auto job = REL::RelocationID(38088, 39042).address();
+        inspecting = "UI job pause guard and UI/console calls";
         auto uiJob = RuntimePatchInspection::InspectUIJob(Function(job), job,
             resolved.processMessages, resolved.advanceMovies, resolved.getConsole);
         if (!uiJob || !IsExecutable(uiJob->executeConsole)) Fail("unrecognized UI job control flow");
@@ -144,6 +161,7 @@ namespace DietDrCamera::RuntimeHooks
         std::memcpy(uiBranchBytes.data(), reinterpret_cast<const void*>(resolved.uiJobBranch), resolved.uiJobBranchLength);
         sites = resolved;
         prepared = true;
+        inspecting.clear();
         spdlog::info("[Runtime] All instruction patch sites validated for Skyrim {}", REL::Module::get().version().string());
     }
 

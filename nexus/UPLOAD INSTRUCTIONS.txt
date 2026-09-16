@@ -1,111 +1,59 @@
-DIET DR CAMERA 1.0.0 - NEXUS UPLOAD DIRECTIONS
+DIET DR CAMERA 1.1.0 - NEXUS UPDATE DIRECTIONS
 
-Use the ZIP in Desktop/Diet Dr Camera - Mod as the main download and the ZIP in
-Desktop/Diet Dr Camera - Source as the source download on the same mod page.
-Desktop/Diet Dr Camera - Credits and Requirements.txt is ready to copy and paste.
-Upload the ZIPs directly; do not ZIP either desktop folder again.
+1. OPEN THE EXISTING MOD PAGE
 
-1. REVIEW GAMEPLAY ACCEPTANCE
+https://www.nexusmods.com/skyrimspecialedition/mods/191847
+Use the page's management/edit controls to add the update to its Files section.
+The author will upload these files manually. Nothing here sends a support reply
+or uploads a file automatically.
 
-The tested build is installed in the enabled MO2 mod Diet Dr Camera-1.0.0.
-Mysticism projectile tracing, staff Ritual selection, Vanity, first-person
-Hit Shake and the reported chained Whirlwind Sprint/Flee Framing retest have
-author acceptance on Skyrim 1.6.1170.
-Check RELEASE-CHECKLIST.md in the source archive for the other gameplay items,
-including broader Flee Framing combinations, preset persistence, menus and the
-earlier movement-stall scenario. Enable Verbose Logging for a detailed diagnostic
-capture if needed; normal play leaves it off.
-Only describe runtimes as tested after actually testing them. RUNTIME-SUPPORT.md
-lists implemented targets and the existing evidence.
+2. UPLOAD THE MAIN FILE
 
-2. CREATE OR EDIT THE MOD PAGE
+File: Desktop/Diet Dr Camera - Mod/Diet Dr Camera.zip
+Display name: Diet Dr Camera
+Version: 1.1.0
+Category: Main files
+Description: Camera plugin update with startup compatibility fixes, direct
+numeric slider editing, whole-tab copy/paste, and Target Lock Pitch Bias.
+Requires matching SKSE64, Address Library and SKSE Menu Framework 3.
+Enable mod-manager downloads. Upload the ZIP itself, not its containing folder.
 
-Sign in to Nexus Mods, select Skyrim Special Edition, and choose Upload a mod.
-If your draft page already exists, edit that page instead of making a duplicate.
-Use Diet Dr Camera as the name and 1.0.0 as the version. Choose the appropriate
-camera/gameplay category. Keep the page unpublished while filling it out.
+3. UPLOAD THE MATCHING SOURCE
 
-Paste Description - Nexus BBCode.txt into the description's BBCode/source editor.
-This contains the overview, installation, requirements, compatibility, source
-notice and credits. Separate Requirements and Full Credits text files are also
-provided if you want to arrange those sections yourself. Use the plain-text copies
-in fields that do not accept BBCode.
+File: Desktop/Diet Dr Camera - Source/Diet Dr Camera - Source.zip
+Display name: Diet Dr Camera - Source
+Version: 1.1.0
+Category: Miscellaneous files
+Description: Full corresponding 1.1.0 source, bundled dependencies, pinned
+recipes, tests, licenses and build instructions. For developers; not required
+for playing and not intended for installation through MO2/Vortex.
+Use manual download only, if the form offers that option.
 
-3. ENTER REQUIREMENTS
+4. UPDATE THE PAGE
 
-Add these Nexus mod requirements using their mod IDs or URLs:
-  Address Library for SKSE Plugins - 32444
-  SKSE Menu Framework 3 - 120352
-  ImGui Icons - 114790 (framework gamepad-prompt requirement)
+Set the page version to 1.1.0 and paste CHANGELOG-1.1.0.txt as its changelog.
+The updated Description - Nexus BBCode.txt is available if you want to refresh
+the page text. At minimum, add these two links to the existing description:
+Source: https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.0
+Build: https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.0/BUILDING.md
+Keep existing requirements, credits, permissions and screenshots.
 
-Include SKSE64 and Microsoft Visual C++ x64 Redistributable as external
-requirements, with the links in Requirements.txt. Emphasize that SKSE, Address
-Library and the framework must match the user's executable version.
+Existing required mods: Address Library 32444, SKSE Menu Framework 120352,
+ImGui Icons 114790; SKSE64 and the VC++ x64 runtime are external requirements.
+TDM 51614 and OAR 92109 remain optional integrations.
 
-True Directional Movement (51614) and Open Animation Replacer (92109) are optional
-integrations. Describe them as optional; do not mark them as mandatory downloads.
-Do not add CommonLibSSE-NG or the compiled C++ libraries as player requirements.
+5. FOLLOW UP ON SECURITY REVIEW
 
-4. ADD THE FILES
+Reply to Dominic in the existing Nexus support conversation using the draft
+and links in SECURITY-REVIEW.txt. Include the mod page link above.
+Keep the flagged 1.0 file available for staff to inspect while review is open;
+do not delete it to try to clear the warning. The old 1.0 source tag remains
+available alongside 1.1.0. Uploading a new version does not itself complete
+the staff review or guarantee a change to the security badge.
 
-MAIN FILE
-  Upload: Diet Dr Camera-1.0.0.zip
-  Display name: Diet Dr Camera
-  Version: 1.0.0
-  Category: Main files
-  Description: Main SE/AE plugin. Requires matching SKSE64, Address Library and
-  SKSE Menu Framework 3. Contains only runtime files. Install with MO2
-  or Vortex. See the description for runtime coverage and compatibility notes.
-  Enable mod-manager downloading for this file if the form offers that setting.
+Do not upload PDBs, manifests, test logs, source folders or private runtime
+fixtures as extra main files. The two prepared ZIPs contain the intended payloads.
 
-SOURCE FILE
-  Upload: Diet Dr Camera - Source-1.0.0.zip
-  Display name: Diet Dr Camera - Source
-  Version: 1.0.0
-  Category: Miscellaneous files
-  Description: Corresponding GPL source for Diet Dr Camera 1.0.0, including
-  dependency sources, exact build recipes/patches, tests and build instructions.
-  For developers; not required for playing. Do not install this ZIP in MO2/Vortex.
-  Use manual download only if the form offers a mod-manager download setting.
-
-Keep both downloads publicly accessible together. No separate GitHub repository
-is required for this release. SHA256SUMS.txt and manifest.json are your verification
-records; they do not need their own Nexus download entries.
-
-5. SET CREDITS AND PERMISSIONS
-
-Paste Full Credits.txt into the credits field, or use the BBCode copy if supported.
-Paste Permissions.txt into the additional permissions/license notes field.
-
-Where Nexus provides individual permission options, allow redistribution,
-modification, conversion and asset/code reuse subject to the included GPL and
-third-party terms. Do not require people to ask permission for GPL-permitted use.
-Do not add a blanket ban on reuploads, commercial use or donation-point use of
-GPL-covered code. Preserve the source-sharing and license-notice obligations.
-For the ownership question, state that the release includes third-party open-source
-components used under their licenses. Do not claim every component is your own.
-These permissions do not change separate third-party terms or game asset rights.
-
-6. ADD THE IMAGES
-
-Select your preferred thumbnail and add gameplay screenshots/video if desired.
-Preview the thumbnail crop and description formatting before publishing.
-
-7. PREVIEW AND PUBLISH
-
-Confirm that the main file is the installable ZIP, the matching source file is
-available, the requirements/credits/license text is present, and all links work.
-Review RELEASE-NOTES.md and the unchecked gameplay items in RELEASE-CHECKLIST.md.
-Publish when you accept the tested behavior and the documented runtime coverage.
-
-FOR FUTURE UPDATES
-
-Increase the version, build/package again, and upload the matching new main and
-source ZIPs together. Keep matching source access for older DLLs still offered.
-Use the release packager; never package your live MO2 folder or personal presets.
-Preserve the public preset format contract and frozen defaults in PRESET-COMPAT.md.
-Preset creators should distribute their own TOML presets, not a copy of your DLL.
-
-Nexus guidance checked September 12, 2026 (field wording may vary):
-https://help.nexusmods.com/article/136-best-practices-for-mod-authors
-https://help.nexusmods.com/article/28-file-submission-guidelines
+Official guidance checked September 15, 2026; exact UI wording may vary:
+https://help.nexusmods.com/article/117-why-has-my-mod-been-quarantined
+https://help.nexusmods.com/article/128-anti-virus-false-positives

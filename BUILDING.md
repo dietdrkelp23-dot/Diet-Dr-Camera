@@ -30,6 +30,14 @@ If using a development checkout whose CommonLib is a submodule, run
 `git submodule update --init --recursive` first. The complete public source
 archive and the prepared public repository already contain its source files.
 
+For the tagged 1.1.0 source:
+
+```powershell
+git clone https://github.com/dietdrkelp23-dot/Diet-Dr-Camera.git C:\src\Diet-Dr-Camera
+Set-Location C:\src\Diet-Dr-Camera
+git checkout v1.1.0
+```
+
 Set up vcpkg once, outside the project:
 
 ```powershell
@@ -57,7 +65,7 @@ Run from the DDC source root. Replace `C:/src/vcpkg` if needed:
 
 ```powershell
 cmake -S . -B build/release-candidate -G "Visual Studio 18 2026" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/src/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static-md -DDDC_DEPLOY_TO_MO2=OFF -DDDC_BUILD_CHECKS=ON
-cmake --build build/release-candidate --config Release --parallel 8
+cmake --build build/release-candidate --config Release --parallel 4
 ctest --test-dir build/release-candidate -C Release --output-on-failure
 ```
 

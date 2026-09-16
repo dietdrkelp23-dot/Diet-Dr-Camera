@@ -46,17 +46,11 @@ inline void CheckRuntimeImage(const std::filesystem::path& executable, const std
     require(RtlAddFunctionTable(functions,exception.Size/sizeof(RUNTIME_FUNCTION),reinterpret_cast<DWORD64>(image))!=0);
     struct TableOwner { RUNTIME_FUNCTION* table; ~TableOwner() { RtlDeleteFunctionTable(table); } } tableOwner{functions};
 
-    DWORD unused{};
-    const auto versionSize=GetFileVersionInfoSizeW(executable.c_str(),&unused);
-    require(versionSize!=0);
-    std::vector<std::uint8_t> versionInfo(versionSize);
-    require(GetFileVersionInfoW(executable.c_str(),0,versionSize,versionInfo.data())!=0);
-    VS_FIXEDFILEINFO* versionData=nullptr;
-    UINT versionLength{};
-    require(VerQueryValueW(versionInfo.data(),L"\\",reinterpret_cast<void**>(&versionData),&versionLength)!=0 &&
-        versionLength>=sizeof(VS_FIXEDFILEINFO));
-    const REL::Version version{HIWORD(versionData->dwFileVersionMS),LOWORD(versionData->dwFileVersionMS),
-        HIWORD(versionData->dwFileVersionLS),LOWORD(versionData->dwFileVersionLS)};
+    // Use the production version reader. SE 1.5.97's fixed numeric version is
+    // 1.0.0.0; its actual runtime version is in the ProductVersion string.
+    const auto detectedVersion=REL::GetFileVersion(executable.wstring());
+    require(detectedVersion.has_value());
+    const auto version=*detectedVersion;
     require(REL::Module::mock(version,REL::Module::Runtime::Unknown,L"SkyrimSE.exe",reinterpret_cast<std::uintptr_t>(image)));
     require(REL::IDDB::inject(library.wstring(),version));
     DietDrCamera::RuntimeHooks::Prepare();

@@ -1,0 +1,35 @@
+#include "UI/MenuFrameworkBinding.h"
+#include <iostream>
+#include <stdexcept>
+
+int wmain(int argc, wchar_t** argv)
+{
+    try {
+        const auto check = [](bool ok, const char* message) {
+            if (!ok) throw std::runtime_error(message);
+        };
+        check(argc == 2, "Expected the private framework fixture DLL path");
+        check(static_cast<HMODULE>(menuFramework) == nullptr,
+              "The fixture must not be present when the consumer starts");
+        check(!DietDrCamera::MenuFrameworkBinding::HasContext(),
+              "An absent framework must not expose an ImGui context");
+
+        const auto fixture = LoadLibraryW(argv[1]);
+        check(fixture != nullptr, "Fixture DLL could not be loaded");
+        check(static_cast<HMODULE>(menuFramework) == fixture,
+              "The handle must recover after the dependency loads later");
+        check(!DietDrCamera::MenuFrameworkBinding::HasContext(),
+              "A loaded DLL is not sufficient before ImGui initializes");
+        const auto initialize = reinterpret_cast<void (*)()>(
+            GetProcAddress(menuFramework, "SetFixtureContextReady"));
+        check(initialize != nullptr, "Deferred handle must work with SDK export lookups");
+        initialize();
+        check(DietDrCamera::MenuFrameworkBinding::HasContext(),
+              "The UI should become available when its context is ready");
+        FreeLibrary(fixture);
+        std::cout << "Late framework load and context readiness checks passed\n";
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+}

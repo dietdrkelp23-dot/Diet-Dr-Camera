@@ -1,4 +1,27 @@
-# Release verification - 1.0.0
+# Release verification - 1.1.0
+
+The author approved this update for distribution on September 15, 2026 after
+testing in the normal Skyrim 1.6.1170 mod list. It includes typed slider values,
+whole-tab copy/paste, Target Lock transition Pitch Bias, consistent transition
+toggles/heading, and fixed 0.30-second crosshair smoothing.
+
+The final tested DLL SHA256 is
+`5B3A303C9E3F7E900E2A06265411397131BFA18FCF276473AA4D89F5AC41D697`.
+All 33 automated checks pass, including new numeric-input, Pitch Bias and
+late-loaded Menu Framework checks. Packaging verifies the matching PDB, exact
+runtime payload, embedded notices, source inventory and archive hashes.
+The public source's build verification is recorded in its GitHub provenance
+document; the build instructions require no Skyrim installation or Nexus login.
+
+An earlier build with the same runtime fixes passed startup on isolated 1.5.97
+and 1.7.104 installations as well as the normal 1.6.1170 list. The final DLL's
+23:08-23:10 main-list log confirms hook validation and gameplay on 1.6.1170.
+See RUNTIME-TESTING.md for the exact build hashes and test scope. Historical/GOG
+targets have not all been launched, and the original reporter's exact
+`RuntimeHooks.cpp(24)` failure remains unidentified. Release approval does not
+turn these gaps into passing results.
+
+## Previous release verification - 1.0.0
 
 September 14 release audit. This file distinguishes automated evidence from live
 gameplay; an unchecked item is not a passing claim. Prior detailed development

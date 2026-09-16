@@ -3064,10 +3064,8 @@ namespace DietDrCamera
             size = (stringTaut || hasShots) ? 0.0 : 1.0;
         }
 
-        // Smooth pose transitions. Without this the reticle snaps:
-        // fire → instant vanilla; redraw → instant prediction. Use
-        // exponential smoothing toward (sx, sy, size) with a short
-        // time constant so the eye reads it as a glide, not a jump.
+        // Ease the native crosshair as projectile tracing hides/restores it.
+        // The drawn trajectories and impact markers have their own timing.
         // First frame after the bow path enters: initialize smoothed
         // state to target so we don't lerp from stale (0,0,1) values.
         const float dt = smoothedValid_ ? std::clamp(nowSec - lastSmoothTime_, 0.0f, 0.25f) : 0.0f;
@@ -3078,11 +3076,9 @@ namespace DietDrCamera
             smoothedSize_  = size;
             smoothedValid_ = true;
         } else {
-            // Smoothing time constant — user-tunable via the Extras
-            // panel. ~0.06s is the snappy default; bigger values
-            // glide more, smaller values approach instant snap.
-            // alpha = 1 - exp(-dt/tau).
-            const float kTau = std::max(0.01f, SettingsManager::GetSingleton().archeryTracingSmoothTau);
+            // Fixed at the former Smoothing slider's 0.30 setting.
+            // Legacy preset values are retained for round-tripping only.
+            constexpr float kTau = 0.30f;
             const float alpha = 1.0f - std::exp(-dt / kTau);
             smoothedX_    += (sx   - smoothedX_)    * static_cast<double>(alpha);
             smoothedY_    += (sy   - smoothedY_)    * static_cast<double>(alpha);

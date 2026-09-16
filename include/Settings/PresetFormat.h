@@ -8,7 +8,7 @@ namespace DietDrCamera
 {
     // Public storage contract starts here. Increment for new persisted fields
     // as well as changed meanings: older builds must not erase newer tuning.
-    inline constexpr int kCurrentPresetFormat = 7;
+    inline constexpr int kCurrentPresetFormat = 8;
 
     inline bool HasFinitePresetValues(const toml::node& node)
     {

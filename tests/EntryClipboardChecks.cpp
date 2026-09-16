@@ -1,5 +1,6 @@
 #include "Settings/CameraProfile.h"
 #include "UI/EntryClipboardTarget.h"
+#include "UI/TabClipboard.h"
 
 #include <array>
 #include <iostream>
@@ -25,6 +26,8 @@ static CameraProfile TunedProfile(float seed)
     p.transitionZoom = 0.25f;
     p.transitionSetAimBias = true;
     p.transitionAimBias = 0.75f;
+    p.transitionSetPitchBias = true;
+    p.transitionPitchBias = -0.5f;
     p.SyncTransitionOverride();
     return p;
 }
@@ -38,6 +41,8 @@ static void RequireProfile(const CameraProfile& actual, const CameraProfile& exp
             actual.transitionZoom == expected.transitionZoom &&
             actual.transitionSetAimBias == expected.transitionSetAimBias &&
             actual.transitionAimBias == expected.transitionAimBias &&
+            actual.transitionSetPitchBias == expected.transitionSetPitchBias &&
+            actual.transitionPitchBias == expected.transitionPitchBias &&
             actual.transitionOverride == expected.transitionOverride,
             "Enemy framing/transition settings did not reach the selected destination");
 }
@@ -45,6 +50,19 @@ static void RequireProfile(const CameraProfile& actual, const CameraProfile& exp
 int main()
 {
     try {
+        const std::vector<std::string> sourceKeys{"Unsheathed/0", "Unsheathed/1", "Power Attack/0"};
+        const std::vector<std::string> destinationKeys{"Unsheathed/1", "Drawing/0", "Unsheathed/0"};
+        const auto pairs = MatchTabEntries(sourceKeys, destinationKeys);
+        Require(pairs == std::vector<std::pair<std::size_t, std::size_t>>{{1,0},{0,2}},
+            "Tab paste mixed environments or matched unrelated sub-states by position");
+        Require(MatchTabEntries({"same", "same"}, {"same"}).empty() &&
+            MatchTabEntries({"same"}, {"same", "same"}).empty(), "Ambiguous tab entries must not be pasted");
+        struct LocationSlot { int locIdx; float tuning; };
+        std::vector<LocationSlot> locations{{0, 12.0f}, {1, 24.0f}, {2, 36.0f}, {-1, 48.0f}};
+        RemapTabLocationSlots(locations, {2, -1, 0});
+        Require(locations[0].locIdx == 2 && locations[0].tuning == 12.0f &&
+            locations[1].locIdx == -1 && locations[2].locIdx == 0 && locations[3].locIdx == -1,
+            "Tab paste moved location tuning to another place after a preset reordered its locations");
         // Model the real render order: an enemy toolbar button is marked,
         // then each (unhovered) list row tries to attach its own storage.
         // The old frame-only guard replaced the button's coordinate with

@@ -5,6 +5,7 @@
 #include "Camera/AnimationCameraController.h"
 #include "Camera/CameraController.h"
 #include "Camera/StateResolver.h"
+#include "Camera/TargetLockPitchBias.h"
 #include "Core/Spring.h"
 #include "Dialogue/DialogueLookPicker.h"
 #include "Hooks/HookManager.h"
@@ -442,6 +443,7 @@ namespace DietDrCamera
 
     void CameraController::ResetTransitionState()
     {
+        currentLockPitchBias = velLockPitchBias = 0.0f;
         m_vanityTransition.Reset();
         InvalidateProfileReferences();
         lastSelectedProfile = nullptr;
@@ -455,6 +457,7 @@ namespace DietDrCamera
 
     void CameraController::ResetZoomBaseline()
     {
+        currentLockPitchBias = velLockPitchBias = 0.0f;
         m_vanityTransition.Reset();
         // Snap every profile channel back to Skyrim-vanilla values AND
         // restore the engine zoom fields to the PRE-PLUGIN value captured
@@ -666,6 +669,8 @@ namespace DietDrCamera
 
         if (!coveringTransition &&
             currentState != thirdPerson && currentState != mounted && currentState != dragon) {
+            currentLockPitchBias = 0.0f;
+            velLockPitchBias = 0.0f;
             m_vanityTransition.Reset();
             if (originalFOV >= 0.0f) {
                 a_camera->worldFOV = originalFOV;
@@ -2347,7 +2352,7 @@ namespace DietDrCamera
             const bool tlTuned =
                 t.sideOffset != d.sideOffset || t.height != d.height ||
                 t.zoom != d.zoom || t.fov != d.fov ||
-                t.rotation != d.rotation || t.pitchOffset != d.pitchOffset;
+                t.rotation != d.rotation || t.pitchOffset != d.pitchOffset || t.transitionSetPitchBias;
             selected = (resolver.IsTargetLocked() && tlTuned)
                            ? &settings.paraglideTLProfile
                            : &settings.paraglideProfile;
@@ -3804,6 +3809,7 @@ namespace DietDrCamera
             // block runs every frame in both lock states, so the release can't
             // leak when the lock drops.
             float desiredLockAimYaw = 0.0f;
+            float desiredLockPitchBias = 0.0f;
             if (resolver.IsTargetLocked()) {
                 auto& tdm = TDMIntegration::GetSingleton();
                 if (auto h = tdm.GetCurrentTarget()) {
@@ -3813,6 +3819,8 @@ namespace DietDrCamera
                         const float dx   = tpos.x - pp.x;
                         const float dy   = tpos.y - pp.y;
                         const float d    = std::sqrt(dx * dx + dy * dy);
+                        if (targetProfile.transitionSetPitchBias && !dialogueActiveForProfile)
+                            desiredLockPitchBias = TargetLockPitchBias::Radians(d, targetProfile.transitionPitchBias);
                         // AIM BIAS: global, unless the composed profile carries
                         // an override (2026-09-07). targetProfile starts as a
                         // copy of the resolved ENTRY and has already had the
@@ -3895,6 +3903,11 @@ namespace DietDrCamera
                 }
             }
             springStep(currentLockAimYaw, velLockAimYaw, desiredLockAimYaw, lockAimOmega);
+            springStep(currentLockPitchBias, velLockPitchBias, desiredLockPitchBias, lockAimOmega);
+            if (!std::isfinite(currentLockPitchBias) || !std::isfinite(velLockPitchBias)) {
+                currentLockPitchBias = 0.0f;
+                velLockPitchBias = 0.0f;
+            }
             // Defense-in-depth: this spring's output is written into the engine
             // camera yaw every frame, so a single non-finite value would latch
             // and corrupt the view permanently. If anything ever drives it
@@ -3941,7 +3954,7 @@ namespace DietDrCamera
         float effectiveZoom   = currentProfile.zoom;
         float effectiveFOV    = currentProfile.fov;
         float effectiveRot    = currentProfile.rotation;
-        float effectivePitch  = currentProfile.pitchOffset;
+        float effectivePitch  = currentProfile.pitchOffset + currentLockPitchBias * 100.0f;
 
 
         // Store effective rotation for HookManager to read next frame

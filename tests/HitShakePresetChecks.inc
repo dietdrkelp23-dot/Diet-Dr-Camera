@@ -223,7 +223,7 @@ hit_shake_set = true
     RoundTrip(s);
     Require(s.stateNoise[normal].hitShake == migrated, "Migrated tuning is converted a second time on save/reload");
     auto modern = s.BuildSaveTable();
-    Require(kCurrentPresetFormat == 7, "New hit controls did not advance the storage format");
+    Require(kCurrentPresetFormat >= 7, "New hit controls did not advance the storage format");
     auto* row = modern["noise"]["states"][normal].as_table();
     Require(row && row->contains("hit_shake_speed") && row->contains("hit_shake_bounce") &&
             row->contains("hit_shake_texture") && !row->contains("hit_shake_feel") && !row->contains("hit_shake_recovery"),

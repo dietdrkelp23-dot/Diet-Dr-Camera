@@ -1,0 +1,49 @@
+NEXUS SECURITY REVIEW - WHAT TO SEND
+
+Reply in the existing conversation with Dominic. The full source and detailed
+build instructions he requested are public. Include BOTH versions: the 1.0
+file originally flagged and the 1.1.0 update. SOURCE-PROVENANCE.md associates
+the corresponding archives and DLLs with their SHA-256 hashes.
+
+Copy the message below. It is a draft; it has not been sent.
+
+Hi Dominic,
+
+The full source and build instructions for Diet Dr Camera are now public.
+
+Mod page:
+https://www.nexusmods.com/skyrimspecialedition/mods/191847
+
+Original flagged version 1.0.0 source:
+https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.0.0-source.1
+1.0.0 build instructions:
+https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.0.0-source.1/BUILDING.md
+
+Version 1.1.0 update source:
+https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.0
+1.1.0 build instructions:
+https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.0/BUILDING.md
+1.1.0 artifact hashes and source provenance:
+https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.0/SOURCE-PROVENANCE.md
+
+The repository includes the plugin source, bundled dependency sources, pinned
+dependency recipes, tests and license notices. Skyrim is not required to compile
+the plugin or run its standalone checks. The instructions cover prerequisites,
+configuration, compilation, tests and packaging.
+
+Please review the flagged files and let me know if you need anything else to
+complete the security checks.
+
+Thank you,
+Preston
+
+END OF DRAFT
+
+After replying, wait for staff to complete the review. Publishing source or
+uploading the update does not automatically remove the warning. Keep the
+flagged file available for inspection; Nexus specifically advises against
+deleting a blocked file while it is awaiting review.
+
+Official guidance:
+https://help.nexusmods.com/article/117-why-has-my-mod-been-quarantined
+https://help.nexusmods.com/article/128-anti-virus-false-positives

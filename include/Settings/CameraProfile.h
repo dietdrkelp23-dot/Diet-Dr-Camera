@@ -96,6 +96,11 @@ namespace DietDrCamera
         bool  transitionSetAimBias   = false;
         float transitionAimBias      = 1.0f;
 
+        // Target Lock only. Signed proximity pitch; no global counterpart.
+        // An enabled enemy value replaces the entry's, including explicit zero.
+        bool  transitionSetPitchBias = false;
+        float transitionPitchBias    = 0.0f;
+
         // SHOUT ENTRIES ONLY — "Lag" (seconds): after the shout ends, hold
         // the Shout camera this long before switching back to the
         // sheathed/unsheathed state (the shouts twin of Projectile Lag).
@@ -112,7 +117,7 @@ namespace DietDrCamera
             return transitionSetRotation || transitionSetPitch ||
                    transitionSetPosition || transitionSetZoom ||
                    transitionSetFOV || transitionSetLooseness ||
-                   transitionSetWeight || transitionSetAimBias;
+                   transitionSetWeight || transitionSetAimBias || transitionSetPitchBias;
         }
         // Re-derive the master from the seven. Call after touching any of
         // them; every runtime gate still reads transitionOverride.

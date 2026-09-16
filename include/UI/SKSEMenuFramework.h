@@ -1,11 +1,11 @@
 #include <windows.h>
+#include "UI/MenuFrameworkBinding.h"
 
 #include <cassert>
 #include <codecvt>
 #include <locale>
 #include <string>
 
-static auto menuFramework = GetModuleHandleW(L"SKSEMenuFramework");
 #define MENU_WINDOW SKSEMenuFramework::Model::WindowInterface*
 namespace ImGuiMCP {
     typedef struct ImVec2 ImVec2;
@@ -18,8 +18,7 @@ namespace ImGuiMCP {
 namespace SKSEMenuFramework {
     using namespace ImGuiMCP;
     inline bool IsInstalled() {
-        constexpr auto dllPath = "Data/SKSE/Plugins/SKSEMenuFramework.dll";
-        return std::filesystem::exists(dllPath);
+        return DietDrCamera::MenuFrameworkBinding::Module() != nullptr;
     }
 
     namespace Model {

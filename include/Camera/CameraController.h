@@ -349,6 +349,8 @@ namespace DietDrCamera
         // Target-lock biased-aim yaw, spring-smoothed so entering and
         // (critically) exiting lock doesn't snap the camera. Unit: radians.
         float currentLockAimYaw = 0.0f;
+        float currentLockPitchBias = 0.0f;
+        float velLockPitchBias = 0.0f;
         float velLockAimYaw     = 0.0f;
 
         // For-Honor lateral side-offset shrink, eased with the SAME spring as

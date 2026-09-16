@@ -232,6 +232,8 @@ namespace DietDrCamera
             profile.transitionSetWeight = tbl["transition_set_weight"].value_or(profile.transitionSetWeight);
             profile.transitionSetAimBias = tbl["transition_set_aim_bias"].value_or(profile.transitionSetAimBias);
             profile.transitionAimBias = tbl["transition_aim_bias"].value_or(profile.transitionAimBias);
+            profile.transitionSetPitchBias = tbl["transition_set_pitch_bias"].value_or(profile.transitionSetPitchBias);
+            profile.transitionPitchBias = std::clamp(tbl["transition_pitch_bias"].value_or(profile.transitionPitchBias), -1.5f, 1.5f);
             profile.SyncTransitionOverride();
 
         }
@@ -274,9 +276,12 @@ namespace DietDrCamera
                 tbl.insert("transition_set_looseness", profile.transitionSetLooseness);
                 tbl.insert("transition_set_weight",    profile.transitionSetWeight);
                 tbl.insert("transition_set_aim_bias",  profile.transitionSetAimBias);
+                tbl.insert("transition_set_pitch_bias", profile.transitionSetPitchBias);
             }
             if (profile.transitionAimBias != defaults.transitionAimBias)
                 tbl.insert("transition_aim_bias", static_cast<double>(profile.transitionAimBias));
+            if (profile.transitionPitchBias != defaults.transitionPitchBias)
+                tbl.insert("transition_pitch_bias", static_cast<double>(profile.transitionPitchBias));
             return tbl;
         }
 
@@ -5444,6 +5449,7 @@ namespace DietDrCamera
         // and the lock-aim solve reads the winner off the composed profile.
         // Enemy > entry > global, with no separate resolution path.
         if (src.transitionSetAimBias)  { dst.transitionSetAimBias  = true; dst.transitionAimBias  = src.transitionAimBias; }
+        if (src.transitionSetPitchBias) { dst.transitionSetPitchBias = true; dst.transitionPitchBias = src.transitionPitchBias; }
         dst.SyncTransitionOverride();
     }
 

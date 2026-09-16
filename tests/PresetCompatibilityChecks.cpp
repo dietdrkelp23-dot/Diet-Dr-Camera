@@ -867,7 +867,9 @@ int main(int argc, char** argv) try
     // Every registered category, Target Lock and shout profile. Exercise values
     // equal to a different family's baseline: the sparse writer must keep them.
     const CameraProfile samples[] = { CameraProfile{}, CameraProfile::VanillaHorseback(),
-        CameraProfile::WerewolfDefault(), { .sideOffset = 42, .height = 12, .zoom = 23, .fov = 92 } };
+        CameraProfile::WerewolfDefault(), { .sideOffset = 42, .height = 12, .zoom = 23, .fov = 92 },
+        [] { CameraProfile p; p.transitionSetPitchBias = true; p.transitionPitchBias = -0.75f;
+            p.SyncTransitionOverride(); return p; }() };
     for (const auto& sample : samples) {
         s.ResetAllToVanilla();
         for (auto e : s.GetIndoorEligibleProfiles()) *e.outdoor = sample;
@@ -893,6 +895,22 @@ int main(int argc, char** argv) try
     RoundTrip(s);
     Require(s.sheathed.transitionAimBias == 0.65f && !s.sheathed.transitionSetAimBias,
         "Disabled Aim Bias lost its stored tuning");
+
+    s.tlSheathed.transitionPitchBias = -0.65f;
+    s.tlSheathed.transitionSetPitchBias = false;
+    s.tlSheathed.SyncTransitionOverride();
+    s.enemyOverrides[0][0].profile.transitionSetPitchBias = true;
+    s.enemyOverrides[0][0].profile.transitionPitchBias = 0.0f;
+    s.enemyOverrides[0][0].profile.SyncTransitionOverride();
+    RoundTrip(s);
+    Require(s.tlSheathed.transitionPitchBias == -0.65f && !s.tlSheathed.transitionSetPitchBias,
+        "Disabled Pitch Bias lost its stored tuning");
+    Require(s.enemyOverrides[0][0].profile.transitionSetPitchBias &&
+        s.enemyOverrides[0][0].profile.transitionPitchBias == 0 && s.enemyOverrides[0][0].profile.TransitionAnySet(),
+        "An explicit neutral enemy Pitch Bias was pruned");
+    s.ResetAllToVanilla();
+    Require(s.tlSheathed.transitionPitchBias == 0 && !s.tlSheathed.transitionSetPitchBias,
+        "Pitch Bias did not reset to neutral");
 
     AuthorFixture(s);
     const auto authored = Snapshot(s);

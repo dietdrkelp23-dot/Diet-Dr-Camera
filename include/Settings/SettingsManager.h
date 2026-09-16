@@ -800,11 +800,8 @@ namespace DietDrCamera
         float projectileReticleSizeScale  = 1.0f;   // 0.5..5.0
         float projectileReticleThickness  = 2.0f;   // 1.0..10.0
 
-        // Smoothing time constant (seconds) for the reticle's exponential
-        // lerp between vanilla center and predicted impact. ~0.01 = near-
-        // instant snap; ~0.30 = slow ease. 0.015 keeps the cursor pinned
-        // to the trail tip during fast power changes (drawing); higher
-        // values produced visible cursor lag behind the trail.
+        // Legacy preset field retained for round-tripping older files.
+        // Runtime smoothing is fixed at 0.30s in CrosshairManager.
         float archeryTracingSmoothTau = 0.015f;
 
         // Sneak-eye relocation offset, applied while the player is
@@ -3039,7 +3036,8 @@ namespace DietDrCamera
                 const CameraProfile  d{};
                 return t.sideOffset != d.sideOffset || t.height != d.height ||
                        t.zoom != d.zoom || t.fov != d.fov ||
-                       t.rotation != d.rotation || t.pitchOffset != d.pitchOffset;
+                       t.rotation != d.rotation || t.pitchOffset != d.pitchOffset ||
+                       t.transitionSetPitchBias;
             }
         };
         std::vector<AnimationCameraEntry> animationCameras;

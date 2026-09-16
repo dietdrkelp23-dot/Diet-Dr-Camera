@@ -1,3 +1,47 @@
+# Diet Dr Camera 1.1.0
+
+Adds direct numeric editing, whole-tab copying, Target Lock Pitch Bias,
+startup compatibility fixes, and menu refinements.
+
+- Click a slider's displayed value to type a number. Enter or clicking away
+  commits a valid value within the slider's range; Escape cancels. This works
+  in the main menu and Quick Tune, including sliders with a displayed speed scale.
+  The first click immediately selects the whole number in yellow, ready to type,
+  with the cursor's pulsing outline and green confirmation. The editor fits the
+  digits, including when UI scale is increased. Opening an editor without
+  changing its text preserves the original precision.
+- Transition override toggles use the same size on every row, including Rotation.
+- Projectile Tracing uses fixed crosshair smoothing equivalent to the former
+  Smoothing slider's 0.30 setting. The slider is removed; saved legacy values no
+  longer affect it. Trajectory and impact-marker lifetimes are unchanged.
+- Copy and paste whole configuration tabs from their headers using the existing
+  copy/paste bindings, or right-click a tab for Copy Tab / Paste Tab. Matching
+  entries include both environments, enable flags, and nested overrides. Specific
+  Weapons and Specific Animations carry their identities; missing bindings are
+  added on paste. Different types of settings are rejected. Entries match by
+  identity instead of list position, including reordered location overrides.
+- Target Lock transition overrides have Pitch Bias directly below Aim Bias.
+  Positive values add upward pitch as an enemy approaches; negative values add
+  downward pitch. The effect fades smoothly to zero at 600 game units, with
+  15 degrees per unit of bias at contact. It defaults to zero and has no global
+  slider. Entry, enemy, weapon, animation, and location profiles store the override.
+- Fix a reproduced startup crash on Skyrim 1.5.97: the menu SDK retained a null
+  DLL handle when DDC loaded before SKSE Menu Framework. Resolve the dependency
+  when its API is used and wait for its ImGui context before applying UI scale.
+  This is a separate finding from the still-unidentified `RuntimeHooks.cpp(24)` report.
+- Hook preflight accepts additional equivalent compiler encodings and validates
+  established SE/AE call sites without decoding unrelated trailing code. Failure
+  logs identify the function and relocation IDs being inspected. The reported
+  `RuntimeHooks.cpp(24)` failure is still under investigation; that line alone
+  identifies the shared failure handler, not the rejected hook. Both released
+  and candidate hooks pass offline preflight on clean 1.5.97, 1.6.1170 and
+  1.7.104 executables with their matching released Address Library databases.
+- Preset format 8 adds the neutral Pitch Bias override. Existing released
+  defaults and preset meanings are preserved.
+
+See [RUNTIME-TESTING.md](RUNTIME-TESTING.md) for the evidence and remaining coverage,
+and [BUILDING.md](BUILDING.md) for the full source build instructions.
+
 # Diet Dr Camera 1.0.0
 
 Initial public release for Skyrim SE and AE on Windows x64. Configure the camera

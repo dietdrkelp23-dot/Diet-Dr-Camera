@@ -1,4 +1,22 @@
-# Runtime compatibility - 1.0.0
+# Runtime compatibility - 1.1.0
+
+The author approved 1.1.0 for release on September 15, 2026. The original
+reported startup failure has not yet been reproduced with its exact mod setup.
+Clean 1.5.97, 1.6.1170 and 1.7.104 executables pass production preflight using
+both the released 1.0 hook sources and the candidate, with each version's
+released Address Library database. These are offline instruction checks,
+not game launches; none reproduces the reported failure.
+See [RUNTIME-TESTING.md](RUNTIME-TESTING.md) for the current test matrix.
+Live 1.5.97 testing has also reproduced a separate menu startup crash after
+successful hook installation. The candidate corrects the menu SDK's early
+DLL-handle caching and waits for its ImGui context before applying UI scale.
+The corrected candidate has reached the main menu and player-camera initialization
+on 1.5.97, and has also loaded its hooks and menu through the 1.7.104 main menu.
+The startup-tested candidate has also loaded through the main menu in the
+author's normal 1.6.1170 mod list. The author accepted Pitch Bias and approved
+the final menu refinements after testing in that list.
+Other historical/GOG builds remain unlaunched.
+The evidence below describes the previously accepted 1.0 release unless noted.
 
 Diet Dr Camera uses one non-VR CommonLibSSE-NG DLL for SE and AE. Version 1.0
 pins alandtse/CommonLibSSE-NG v7.5.4 at

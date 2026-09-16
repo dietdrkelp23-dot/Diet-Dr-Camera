@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
     DietDrCamera
-    VERSION 1.0.0
+    VERSION 1.1.0
     LANGUAGES CXX
 )
 
@@ -181,6 +181,18 @@ if(DDC_BUILD_CHECKS)
     target_link_libraries(RuntimeLayoutChecks PRIVATE CommonLibSSE::CommonLibSSE)
     target_precompile_headers(RuntimeLayoutChecks PRIVATE include/PCH.h)
     add_test(NAME RuntimeLayoutChecks COMMAND RuntimeLayoutChecks)
+    # Optional before/after diagnosis using a previous release's hook sources.
+    # Game executables remain private inputs to --image, never build inputs.
+    set(DDC_HOOK_BASELINE_DIR "" CACHE PATH "Previous release hook sources for offline comparison")
+    if(DDC_HOOK_BASELINE_DIR)
+        add_executable(RuntimeBaselineChecks tests/RuntimeLayoutChecks.cpp
+            "${DDC_HOOK_BASELINE_DIR}/RuntimeHooks.cpp"
+            "${DDC_HOOK_BASELINE_DIR}/RuntimePatchInspection.cpp")
+        target_include_directories(RuntimeBaselineChecks PRIVATE include extern/minhook/src/hde)
+        target_compile_definitions(RuntimeBaselineChecks PRIVATE ENABLE_COMMONLIBSSE_TESTING=1)
+        target_link_libraries(RuntimeBaselineChecks PRIVATE CommonLibSSE::CommonLibSSE)
+        target_precompile_headers(RuntimeBaselineChecks PRIVATE include/PCH.h)
+    endif()
     add_executable(PresetCompatibilityChecks tests/PresetCompatibilityChecks.cpp
         tests/PresetRuntimeStubs.cpp src/Settings/SettingsManager.cpp
         src/Settings/PresetManager.cpp src/Settings/MeleeWeaponOverrides.cpp
@@ -217,6 +229,21 @@ if(DDC_BUILD_CHECKS)
     add_executable(MenuLayoutChecks tests/MenuLayoutChecks.cpp)
     target_include_directories(MenuLayoutChecks PRIVATE include)
     add_test(NAME MenuLayoutChecks COMMAND MenuLayoutChecks)
+    add_library(MenuFrameworkLoadFixture SHARED tests/MenuFrameworkLoadFixture.cpp)
+    set_target_properties(MenuFrameworkLoadFixture PROPERTIES
+        OUTPUT_NAME SKSEMenuFramework
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
+    add_executable(MenuFrameworkLoadChecks tests/MenuFrameworkLoadChecks.cpp)
+    target_include_directories(MenuFrameworkLoadChecks PRIVATE include)
+    add_dependencies(MenuFrameworkLoadChecks MenuFrameworkLoadFixture)
+    add_test(NAME MenuFrameworkLoadChecks COMMAND MenuFrameworkLoadChecks
+        $<TARGET_FILE:MenuFrameworkLoadFixture>)
+    add_executable(SliderValueInputChecks tests/SliderValueInputChecks.cpp)
+    target_include_directories(SliderValueInputChecks PRIVATE include)
+    add_test(NAME SliderValueInputChecks COMMAND SliderValueInputChecks)
+    add_executable(TargetLockPitchBiasChecks tests/TargetLockPitchBiasChecks.cpp)
+    target_include_directories(TargetLockPitchBiasChecks PRIVATE include)
+    add_test(NAME TargetLockPitchBiasChecks COMMAND TargetLockPitchBiasChecks)
     add_executable(FleeFramingChecks tests/FleeFramingChecks.cpp)
     target_include_directories(FleeFramingChecks PRIVATE include)
     add_test(NAME FleeFramingChecks COMMAND FleeFramingChecks)

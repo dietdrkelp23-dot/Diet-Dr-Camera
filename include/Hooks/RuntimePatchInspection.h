@@ -20,6 +20,8 @@ namespace DietDrCamera::RuntimePatchInspection
     using Instructions = std::vector<Instruction>;
     std::optional<Instructions> Decode(std::span<const std::uint8_t> code, std::uintptr_t address);
     std::optional<std::size_t> UniqueCall(const Instructions& instructions, std::uintptr_t target);
+    // Validate a known call without decoding unrelated code after the site.
+    std::optional<Instruction> CallAt(std::span<const std::uint8_t> code, std::uintptr_t address, std::size_t offset);
 
     struct TimerCall { std::size_t offset; std::uintptr_t multiplier; };
     std::optional<TimerCall> DialogueTimerCall(std::span<const std::uint8_t> code,

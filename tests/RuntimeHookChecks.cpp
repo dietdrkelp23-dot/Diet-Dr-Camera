@@ -61,6 +61,17 @@ namespace
         const std::array<std::uint8_t,2> truncatedImmediate{0x48,0xB8};
         Check(!Decode(truncatedImmediate,0x1000), "reject truncated immediate");
 
+        // Known SE/AE call sites must not depend on decoding unrelated trailing
+        // compiler output. The call is still decoded from the function entry.
+        std::vector<std::uint8_t> known{0x90};
+        Call(known, 0x1000, 0x2000);
+        known.insert(known.end(), {0x48, 0xB8}); // unrelated incomplete instruction
+        Check(!Decode(known, 0x1000), "fixture must fail a whole-function scan");
+        const auto established = CallAt(known, 0x1000, 1);
+        Check(established && established->target == 0x2000, "validate established call without decoding its suffix");
+        Check(!CallAt(code, 0x1000, 2), "known offset inside an immediate is not a call boundary");
+        Check(!CallAt(known, 0x1000, known.size()), "reject out-of-range established site");
+
         std::vector<std::uint8_t> timerCode;
         Call(timerCode,0x1000,0x2000);
         timerCode.insert(timerCode.end(), {0xF3,0x0F,0x59,0x0D,0,0,0,0,0x49,0x8B,0x8E,0xF8,0,0,0});
@@ -87,6 +98,25 @@ namespace
             job=Job(nearBranch);
             job[job.size()-11]=0xD0;
             Check(!inspect(), "reject incorrect console this pointer");
+            job=Job(nearBranch);
+            // Equivalent MOV RCX,RAX encoding emitted by other compiler builds.
+            job[job.size()-12]=0x89;
+            job[job.size()-11]=0xC1;
+            Check(inspect().has_value(), "accept equivalent console this-pointer encoding");
+            job=Job(nearBranch);
+            // One alignment NOP in the guarded block, with the branch adjusted.
+            job.insert(job.begin() + (nearBranch ? 17 : 13), 0x90);
+            job[nearBranch ? 13 : 12] += 1;
+            // Inserting a byte also shifts each relative call's origin.
+            for (std::size_t offset = nearBranch ? 25 : 21; offset < job.size(); ++offset) {
+                if (job[offset] != 0xE8) continue;
+                std::int32_t displacement{};
+                std::memcpy(&displacement, job.data() + offset + 1, 4);
+                --displacement;
+                std::memcpy(job.data() + offset + 1, &displacement, 4);
+                offset += 4;
+            }
+            Check(inspect().has_value(), "accept compiler alignment NOPs in UI job");
         }
     }
 

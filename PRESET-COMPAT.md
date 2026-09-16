@@ -72,8 +72,12 @@ Strength defaults to zero; formats 1-5 retain their existing camera behavior.
 The authored marker preserves explicit zero overrides in optional FP attack
 directions. Format 7 replaces Feel/Recovery with `hit_shake_speed`,
 `hit_shake_bounce` and `hit_shake_texture`. Strength still defaults to zero;
-Speed and Bounce default to 0.5 and Texture to zero. Current development builds
-write format 7 and read formats 1-6.
+Speed and Bounce default to 0.5 and Texture to zero. Release 1.0 writes format 7.
+Format 8 adds `transition_set_pitch_bias` and `transition_pitch_bias` to camera
+profiles. Pitch Bias is a target-lock override with no global control; its
+disabled, zero default preserves all earlier camera behavior. Explicit zero
+overrides and disabled-but-authored values survive save/load. Version 1.1 writes
+format 8 and reads formats 1-7. Frozen release fixtures remain unchanged.
 
 Format-6 Hit Shake converts once on load: Strength preserves the old wave's
 first-peak amplitude before axis mixing/limiting, Speed matches its first-peak

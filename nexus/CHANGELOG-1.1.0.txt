@@ -1,0 +1,17 @@
+Diet Dr Camera 1.1.0
+
+- Fixed a reproduced startup crash on Skyrim 1.5.97 when SKSE Menu Framework
+  loads after Diet Dr Camera; improved runtime hook checks and failure details.
+- Click a slider value to select its digits in yellow and type a supported
+  value. Enter or clicking away applies it; Escape cancels.
+- Copy and paste entire configuration tabs from their headers or context menus.
+- Added Pitch Bias below Aim Bias in Target Lock transition overrides. Positive
+  values pitch up and negative values pitch down as the enemy gets closer.
+- Matched all Transition Override toggle sizes and corrected the popup heading.
+- Removed the Projectile Tracing Smoothing slider and fixed its behavior at
+  the former 0.30 setting.
+- Published full versioned source and detailed build instructions on GitHub.
+
+Startup fixes were tested on Steam 1.5.97, 1.6.1170 and 1.7.104. These startup
+checks do not establish full gameplay coverage for every supported runtime.
+Existing presets remain compatible; Pitch Bias defaults to zero.

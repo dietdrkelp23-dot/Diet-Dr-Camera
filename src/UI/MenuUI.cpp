@@ -8,6 +8,8 @@
 #include "UI/EntryClipboardTarget.h"
 #include "UI/DirectionalNavigation.h"
 #include "UI/MenuLayout.h"
+#include "UI/SliderValueInput.h"
+#include "UI/TabClipboard.h"
 #include "Camera/AnimationCameraController.h"
 #include "Camera/AnimationCatalog.h"
 #include "Camera/CameraController.h"
@@ -149,6 +151,7 @@ namespace DietDrCamera
         static void EnsureMenuUiScale()
         {
             using namespace ImGuiMCP;
+            if (!MenuFrameworkBinding::HasContext()) return;
             auto* io = ImGui::GetIO();
             if (!io) return;
             const float displayY = io->DisplaySize.y;
@@ -970,6 +973,18 @@ namespace DietDrCamera
         static float    sPadAnimTime = 0.0f;    // breathing-pulse clock
         static bool     sPadCursorSnapReq = false;  // skip the glide once (layer switch)
 
+        static void DrawCursorOutline(ImGuiMCP::ImDrawList* drawList, const PadItem& rect,
+                                      ImGuiMCP::ImU32 rgb = 0x00B8B8B8u)
+        {
+            using namespace ImGuiMCP;
+            const float breathe = 0.78f + 0.22f * std::sin(sPadAnimTime * 5.0f);
+            const ImU32 color = (static_cast<ImU32>(breathe * 255.0f) << 24) | rgb;
+            ImGui::ImDrawListManager::AddRect(drawList,
+                ImVec2(rect.x0 - Sx(2.0f), rect.y0 - Sx(2.0f)),
+                ImVec2(rect.x1 + Sx(2.0f), rect.y1 + Sx(2.0f)),
+                color, Sx(4.0f), 0, Sx(2.0f));
+        }
+
         // Animation pass: decays + draws the flashes and the glided
         // cursor on the foreground list. Called once per frame from the
         // shared feed (frame-guarded).
@@ -1069,12 +1084,7 @@ namespace DietDrCamera
             sPadCursorVis.y0 += (sPadCursorRect.y0 - sPadCursorVis.y0) * k;
             sPadCursorVis.x1 += (sPadCursorRect.x1 - sPadCursorVis.x1) * k;
             sPadCursorVis.y1 += (sPadCursorRect.y1 - sPadCursorVis.y1) * k;
-            const float breathe = 0.78f + 0.22f * std::sin(sPadAnimTime * 5.0f);
-            const ImU32 col = (static_cast<ImU32>(breathe * 255.0f) << 24) | 0x00B8B8B8u;
-            ImGui::ImDrawListManager::AddRect(dl,
-                ImVec2(sPadCursorVis.x0 - Sx(2.0f), sPadCursorVis.y0 - Sx(2.0f)),
-                ImVec2(sPadCursorVis.x1 + Sx(2.0f), sPadCursorVis.y1 + Sx(2.0f)),
-                col, Sx(4.0f), 0, Sx(2.0f));
+            DrawCursorOutline(dl, sPadCursorVis);
         }
 
         // EndChild wrapper for every menu panel: the PushItemFlag spans
@@ -1584,7 +1594,22 @@ namespace DietDrCamera
                                    EnemyOv,         // one entry's whole enemy-override column (button)
                                    FxBeat,          // one Transformations beat row (Bats / Transformation / Revert)
                                    CineSource,      // one Cinematic Effects creature shake (a Dragon / Centurion source)
-                                   EnvHalf };       // a tab's WHOLE env half (Outdoor/Indoor toggle)
+                                   EnvHalf, Scalar, Tab };  // one environment, or a complete tab with overrides
+        enum class TabCollection { Entries, Weapons, Animations };
+        struct TabLocation
+        {
+            SettingsManager::LocationOverride::Kind kind{};
+            std::string name, plugin, keyword, parentName;
+            std::uint32_t formID = 0;
+            bool enabled = true, builtIn = false;
+        };
+        template <class Location>
+        static std::string TabLocationKey(const Location& location)
+        {
+            return std::to_string(static_cast<int>(location.kind)) + "/" +
+                (location.kind == SettingsManager::LocationOverride::Kind::Keyword ? location.keyword :
+                    ItemBindings::FormKey({ location.plugin, location.formID }));
+        }
         struct EntryClipLocSlot
         {
             int           locIdx = -1;   // index into s.locationOverrides (session-local)
@@ -1599,6 +1624,16 @@ namespace DietDrCamera
         };
         struct EntryClipboard
         {
+            float scalar = 0.0f;
+            TabCollection tabCollection = TabCollection::Entries;
+            SpecWeaponsSection tabSection = SpecWeaponsSection::Categories;
+            std::vector<SettingsManager::WeaponBinding> tabBindings;
+            std::vector<SettingsManager::AnimationCameraEntry> tabAnimations;
+            std::vector<TabLocation> tabLocations;
+            std::vector<EntryClipboard> tabEntries;
+            std::vector<std::string> tabKeys;
+            bool enabled = false;
+            bool tabStatePresent = true;
             // Parent weapon copies preserve their individual states. A single
             // state source broadcasts; a weapon source matches state names.
             std::vector<EntryClipboard> bindingStates;
@@ -1723,6 +1758,12 @@ namespace DietDrCamera
 
         struct EntryHoverTarget
         {
+            TabCollection tabCollection = TabCollection::Entries;
+            SpecWeaponsSection tabSection = SpecWeaponsSection::Categories;
+            std::vector<EntryHoverTarget> tabEntries;
+            std::vector<std::string> tabKeys;
+            int tabEnvironment = 0;
+            bool tabMapState = false;
             SettingsManager::WeaponBinding* binding = nullptr;
             int bindingSlot = -1;  // -1 addresses every state when pasting
             SpecWeaponsSection bindingSection = SpecWeaponsSection::Categories;
@@ -1844,6 +1885,10 @@ namespace DietDrCamera
             if (!a_ptr || a_kind == EntryClipKind::None) return;
             if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
             sEntryHover.kind        = a_kind;
+            sEntryHover.tabEntries.clear();
+            sEntryHover.tabKeys.clear();
+            sEntryHover.tabMapState = false;
+            sEntryHover.tabCollection = TabCollection::Entries;
             sEntryHover.ptr         = a_ptr;
             sEntryHover.meleeOv     = a_meleeOv;
             sEntryHover.outdoorBase = a_outdoorBase;
@@ -2049,6 +2094,7 @@ namespace DietDrCamera
             case EntryClipKind::FxBeat:        return "transformation shake";
             case EntryClipKind::CineSource:    return "cinematic shake";
             case EntryClipKind::EnvHalf:       return "tab half";
+            case EntryClipKind::Tab:           return "tab";
             default:                         return "";
             }
         }
@@ -2351,6 +2397,8 @@ namespace DietDrCamera
             if (!sEntryHover.binding || sEntryHover.bindingSection == SpecWeaponsSection::TargetLock) {
                 a_dst->transitionSetAimBias = a_src.transitionSetAimBias;
                 a_dst->transitionAimBias = a_src.transitionAimBias;
+                a_dst->transitionSetPitchBias = a_src.transitionSetPitchBias;
+                a_dst->transitionPitchBias = a_src.transitionPitchBias;
             }
             a_dst->transitionRotation     = a_src.transitionRotation;
             a_dst->transitionPitch        = a_src.transitionPitch;
@@ -2402,6 +2450,15 @@ namespace DietDrCamera
             return target;
         }
 
+        static EntryHoverTarget WeaponsTabTarget(SettingsManager& s, SpecWeaponsSection section);
+        static EntryHoverTarget AnimationsTabTarget(SettingsManager& s, SpecWeaponsSection section);
+        static std::string BindingTabKey(const SettingsManager::WeaponBinding& b)
+        {
+            return ItemBindings::FormKey({b.pluginName, b.formID}) + "/" +
+                ItemBindings::ScopeName(b.bindingScope) + "/" + b.enchantmentKey + "/" +
+                std::to_string(static_cast<int>(b.category));
+        }
+
         static void EntryClipCopy(bool a_batchChild = false)
         {
             using namespace ImGuiMCP;
@@ -2410,6 +2467,44 @@ namespace DietDrCamera
                 return;
             }
             auto& s = SettingsManager::GetSingleton();
+            if (sEntryHover.kind == EntryClipKind::Tab) {
+                const auto target = sEntryHover;
+                EntryClipboard snapshot;
+                snapshot.kind = EntryClipKind::Tab;
+                snapshot.label = target.label;
+                snapshot.tabKeys = target.tabKeys;
+                snapshot.tabCollection = target.tabCollection;
+                snapshot.tabSection = target.tabSection;
+                for (const auto& location : s.locationOverrides)
+                    snapshot.tabLocations.push_back({location.kind, location.name, location.plugin,
+                        location.keyword, location.parentName, location.formID, location.enabled, location.builtIn});
+                if (target.tabCollection == TabCollection::Weapons) {
+                    for (const auto& binding : s.weaponBindings)
+                        if (binding.fpOnly == (target.tabSection == SpecWeaponsSection::FirstPerson))
+                            snapshot.tabBindings.push_back(binding);
+                } else if (target.tabCollection == TabCollection::Animations) {
+                    snapshot.tabAnimations = s.animationCameras;
+                }
+                const bool quiet = std::exchange(sEntryClipQuiet, true);
+                const int environment = s.categoriesEditTab;
+                for (auto child : target.tabEntries) {
+                    s.categoriesEditTab = child.tabEnvironment;
+                    child.owner = target.owner;
+                    sEntryHover = std::move(child);
+                    EntryClipCopy(true);
+                    sEntryClip.enabled = sEntryHover.enableFlag && *sEntryHover.enableFlag;
+                    sEntryClip.tabStatePresent = !sEntryHover.tabMapState ||
+                        (sEntryHover.kind == EntryClipKind::Noise ? s.StateNoiseFor(s.categoriesEditTab).contains(sEntryHover.noiseKey) :
+                            s.stateFirstPerson.contains(sEntryHover.noiseKey));
+                    snapshot.tabEntries.push_back(std::move(sEntryClip));
+                }
+                s.categoriesEditTab = environment;
+                sEntryHover = target;
+                sEntryClip = std::move(snapshot);
+                sEntryClipQuiet = quiet;
+                EntryClipAnnounce("Copied " + target.label + " (both environments and overrides)");
+                return;
+            }
             if (!a_batchChild && sEntryHover.binding && sEntryHover.bindingSlot < 0) {
                 const auto target = sEntryHover;
                 auto count = SettingsManager::GetBindingSubStateCount(target.binding->category);
@@ -2439,6 +2534,8 @@ namespace DietDrCamera
             }
             sEntryClip.bindingStates.clear();
             sEntryClip.bindingStateNames.clear();
+            sEntryClip.tabEntries.clear();
+            sEntryClip.tabKeys.clear();
             sEntryClip.kind  = sEntryHover.kind;
             sEntryClip.label = sEntryHover.label;
             sEntryClip.hasMeleeOv      = false;
@@ -2450,6 +2547,9 @@ namespace DietDrCamera
             sEntryClip.hasFpLoc       = false;
             sEntryClip.hasEnemyOv     = false;
             switch (sEntryHover.kind) {
+            case EntryClipKind::Scalar:
+                sEntryClip.scalar = *static_cast<float*>(sEntryHover.ptr);
+                break;
             case EntryClipKind::Camera:
                 // Bundle: profile (transition block included) + the entry's
                 // weapon-type overrides + its per-location override slots +
@@ -2682,6 +2782,154 @@ namespace DietDrCamera
             // the live springs and zoom baseline: resetting them for an inactive
             // paste snaps to the pre-enemy profile and replays the enemy blend.
             auto& s = SettingsManager::GetSingleton();
+            if (sEntryHover.kind == EntryClipKind::Tab || sEntryClip.kind == EntryClipKind::Tab) {
+                if (sEntryHover.kind != EntryClipKind::Tab || sEntryClip.kind != EntryClipKind::Tab) {
+                    EntryClipAnnounce("Paste: copy a tab and hover the destination tab.");
+                    return false;
+                }
+                auto target = sEntryHover;
+                const auto cameraSection = [](SpecWeaponsSection section) {
+                    return section == SpecWeaponsSection::Categories || section == SpecWeaponsSection::TargetLock;
+                };
+                if (sEntryClip.tabCollection != target.tabCollection ||
+                    (target.tabCollection != TabCollection::Entries &&
+                     sEntryClip.tabSection != target.tabSection &&
+                     !(cameraSection(sEntryClip.tabSection) && cameraSection(target.tabSection)))) {
+                    EntryClipAnnounce("Paste: these tabs contain different kinds of settings.");
+                    return false;
+                }
+                if (target.tabCollection == TabCollection::Entries) {
+                    const auto matches = MatchTabEntries(sEntryClip.tabKeys, target.tabKeys);
+                    if (std::ranges::none_of(matches, [&](const auto& match) {
+                        return sEntryClip.tabEntries[match.first].kind == target.tabEntries[match.second].kind;
+                    })) {
+                        EntryClipAnnounce("Paste: these tabs have no matching settings.");
+                        return false;
+                    }
+                }
+                auto snapshot = std::move(sEntryClip);
+                std::vector<std::string> sourceLocations, destinationLocations;
+                for (const auto& location : snapshot.tabLocations) sourceLocations.push_back(TabLocationKey(location));
+                for (const auto& location : s.locationOverrides) destinationLocations.push_back(TabLocationKey(location));
+                std::vector<bool> usedLocations(sourceLocations.size(), false);
+                const auto markLocation = [&](int index, bool present) {
+                    if (present && index >= 0 && static_cast<std::size_t>(index) < usedLocations.size())
+                        usedLocations[static_cast<std::size_t>(index)] = true;
+                };
+                for (const auto& source : snapshot.tabEntries) {
+                    for (const auto& slot : source.locSlots) markLocation(slot.locIdx, slot.set);
+                    for (const auto& slot : source.locNoise) markLocation(slot.locIdx, slot.present);
+                    for (const auto& slot : source.fpLoc) markLocation(slot.locIdx, slot.present);
+                    for (const auto& slot : source.fxBeatLoc) markLocation(slot.locIdx, slot.present);
+                }
+                for (std::size_t index = 0; index < sourceLocations.size(); ++index) {
+                    const auto& key = sourceLocations[index];
+                    if (!usedLocations[index] || std::ranges::count(sourceLocations, key) != 1 ||
+                        std::ranges::find(destinationLocations, key) != destinationLocations.end()) continue;
+                    const auto& source = snapshot.tabLocations[index];
+                    SettingsManager::LocationOverride location;
+                    location.kind = source.kind;
+                    location.name = source.name;
+                    location.plugin = source.plugin;
+                    location.keyword = source.keyword;
+                    location.parentName = source.parentName;
+                    location.formID = source.formID;
+                    location.enabled = source.enabled;
+                    location.builtIn = source.builtIn;
+                    const auto count = s.GetIndoorEligibleProfiles().size();
+                    for (int environment = 0; environment < SettingsManager::kEnvCount; ++environment) {
+                        location.ProfilesFor(environment).resize(count, CameraProfile::Default3p());
+                        location.ProfileSetFor(environment).resize(count, false);
+                    }
+                    s.locationOverrides.push_back(std::move(location));
+                    destinationLocations.push_back(key);
+                }
+                std::vector<int> locationMap(sourceLocations.size(), -1);
+                for (const auto& [source, destination] : MatchTabEntries(sourceLocations, destinationLocations))
+                    locationMap[source] = static_cast<int>(destination);
+                // Recreate missing identities before collecting destination pointers.
+                // Bindings and animations can move when a preset was loaded since Copy.
+                if (target.tabCollection == TabCollection::Weapons) {
+                    const bool fp = target.tabSection == SpecWeaponsSection::FirstPerson;
+                    for (const auto& source : snapshot.tabBindings) {
+                        const auto key = BindingTabKey(source);
+                        const bool exists = std::ranges::any_of(s.weaponBindings, [&](const auto& b) {
+                            return b.fpOnly == fp && BindingTabKey(b) == key;
+                        });
+                        if (exists) continue;
+                        SettingsManager::WeaponBinding binding;
+                        binding.formID = source.formID;
+                        binding.pluginName = source.pluginName;
+                        binding.displayName = source.displayName;
+                        binding.bindingScope = source.bindingScope;
+                        binding.enchantmentKey = source.enchantmentKey;
+                        binding.category = source.category;
+                        binding.castType = source.castType;
+                        binding.fpOnly = fp;
+                        binding.settingsSeeded = true;
+                        s.weaponBindings.push_back(std::move(binding));
+                    }
+                    target = WeaponsTabTarget(s, target.tabSection);
+                } else if (target.tabCollection == TabCollection::Animations) {
+                    for (const auto& source : snapshot.tabAnimations) {
+                        if (std::ranges::any_of(s.animationCameras, [&](const auto& e) {
+                            return e.animationPath == source.animationPath;
+                        })) continue;
+                        SettingsManager::AnimationCameraEntry entry;
+                        entry.name = source.name;
+                        entry.animationPath = source.animationPath;
+                        entry.subModName = source.subModName;
+                        entry.modName = source.modName;
+                        s.animationCameras.push_back(std::move(entry));
+                    }
+                    s.AssignAnimationCameraUids();
+                    AnimationCameraController::GetSingleton().RebuildMatchIndex();
+                    target = AnimationsTabTarget(s, target.tabSection);
+                }
+                const bool quiet = std::exchange(sEntryClipQuiet, true);
+                const int environment = s.categoriesEditTab;
+                std::size_t applied = 0;
+                for (const auto& [sourceIndex, destinationIndex] : MatchTabEntries(snapshot.tabKeys, target.tabKeys)) {
+                    auto child = target.tabEntries[destinationIndex];
+                    const auto& source = snapshot.tabEntries[sourceIndex];
+                    if (source.kind != child.kind) continue;
+                    s.categoriesEditTab = child.tabEnvironment;
+                    if (child.tabMapState) {
+                        if (child.kind == EntryClipKind::Noise)
+                            child.ptr = &s.StateNoiseFor(child.tabEnvironment)[child.noiseKey];
+                        else
+                            child.ptr = &s.EnsureStateFp(child.noiseKey);
+                    }
+                    child.owner = target.owner;
+                    sEntryHover = std::move(child);
+                    sEntryClip = source;
+                    RemapTabLocationSlots(sEntryClip.locSlots, locationMap);
+                    RemapTabLocationSlots(sEntryClip.locNoise, locationMap);
+                    RemapTabLocationSlots(sEntryClip.fpLoc, locationMap);
+                    RemapTabLocationSlots(sEntryClip.fxBeatLoc, locationMap);
+                    if (EntryClipPaste(true)) {
+                        // Whole tabs preserve disabled-but-authored entries too.
+                        if (sEntryHover.enableFlag) *sEntryHover.enableFlag = source.enabled;
+                        if (source.kind == EntryClipKind::Noise)
+                            static_cast<SettingsManager::NoiseProfile*>(sEntryHover.ptr)->enabled = source.noise.enabled;
+                        if (sEntryHover.tabMapState && !source.tabStatePresent) {
+                            if (source.kind == EntryClipKind::Noise)
+                                s.StateNoiseFor(s.categoriesEditTab).erase(sEntryHover.noiseKey);
+                            else
+                                s.stateFirstPerson.erase(sEntryHover.noiseKey);
+                        }
+                        ++applied;
+                    }
+                }
+                s.categoriesEditTab = environment;
+                sEntryHover = target;
+                sEntryClip = std::move(snapshot);
+                sEntryClipQuiet = quiet;
+                EntryClipAnnounce(applied ? "Pasted " + sEntryClip.label + " onto " + target.label +
+                    " (" + std::to_string(applied) + "/" + std::to_string(target.tabEntries.size()) + " matching entries)" :
+                    "Paste: these tabs have no matching settings.");
+                return applied != 0;
+            }
             if (!a_batchChild && sEntryHover.binding && sEntryHover.bindingSlot < 0) {
                 const auto groupTarget = sEntryHover;
                 auto source = sEntryClip;
@@ -2839,6 +3087,8 @@ namespace DietDrCamera
                     if (sEntryHover.bindingSection != SpecWeaponsSection::TargetLock) {
                         dst->transitionSetAimBias = previous.transitionSetAimBias;
                         dst->transitionAimBias = previous.transitionAimBias;
+                        dst->transitionSetPitchBias = previous.transitionSetPitchBias;
+                        dst->transitionPitchBias = previous.transitionPitchBias;
                         dst->SyncTransitionOverride();
                     }
                     if (sEntryClip.hasHandSet && sEntryHover.bindingSlot == 3 &&
@@ -2920,6 +3170,9 @@ namespace DietDrCamera
                 }
                 break;
             }
+            case EntryClipKind::Scalar:
+                *static_cast<float*>(sEntryHover.ptr) = sEntryClip.scalar;
+                break;
             case EntryClipKind::Noise: {
                 auto* dst = static_cast<SettingsManager::NoiseProfile*>(sEntryHover.ptr);
                 const auto previous = *dst;
@@ -2958,6 +3211,8 @@ namespace DietDrCamera
                         else            lo.stateNoise.erase(sEntryHover.noiseKey);
                     }
                 }
+                if (sEntryClip.hasMeleeNoiseOv && sEntryHover.meleeNoiseOv)
+                    *sEntryHover.meleeNoiseOv = sEntryClip.meleeNoiseOv;
                 break;
             }
             case EntryClipKind::FirstPerson: {
@@ -3078,6 +3333,201 @@ namespace DietDrCamera
             return true;
         }
 
+        static EntryHoverTarget NewTabTarget(const char* label)
+        {
+            EntryHoverTarget target;
+            target.kind = EntryClipKind::Tab;
+            target.ptr = &sKeyedHoverSentinel;
+            target.label = ClipLabelWithSection(label);
+            target.owner = { ImGuiMCP::ImGui::GetFrameCount(), ImGuiMCP::ImGui::GetItemID() };
+            return target;
+        }
+
+        static void AddTabTarget(EntryHoverTarget& tab, std::string key, EntryHoverTarget child, int environment)
+        {
+            child.tabEnvironment = environment;
+            child.label = tab.label + " - " + key;
+            child.owner = tab.owner;
+            tab.tabKeys.push_back(std::move(key) + "/" + std::to_string(environment));
+            tab.tabEntries.push_back(std::move(child));
+        }
+
+        static void AddTabCamera(SettingsManager& s, EntryHoverTarget& tab, const std::string& key,
+            CameraProfile* profile, bool targetLock, MeleeWeaponOverrides* melee = nullptr,
+            bool* enabled = nullptr, SettingsManager::MagicHandOverrideSet* hands = nullptr, int direction = -1,
+            std::optional<SettingsManager::TLSlot> inheritedSlot = std::nullopt)
+        {
+            if (!profile) return;
+            for (int environment = 0; environment < SettingsManager::kEnvCount; ++environment) {
+                EntryHoverTarget child;
+                child.kind = EntryClipKind::Camera;
+                child.ptr = s.VariantOf(profile, environment);
+                child.outdoorBase = profile;
+                child.meleeOv = melee;
+                child.enableFlag = enabled;
+                child.handSet = hands;
+                if (targetLock) {
+                    const auto slot = inheritedSlot ? inheritedSlot : s.SlotFromTLProfile(profile);
+                    child.enemyOv.slot = slot;
+                    child.enemyOv.paDir = direction;
+                    child.enemyOv.valid = slot.has_value() || direction >= 0;
+                    for (std::size_t enemy = 0; enemy < SettingsManager::kEnemyOverrideEnemies; ++enemy) {
+                        if (direction >= 0)
+                            child.enemyOv.fields[enemy] = &s.TlEnemyOverridesPaDirFor(environment)[enemy][direction];
+                        else if (slot)
+                            child.enemyOv.fields[enemy] = &s.EnemyOverridesFor(environment)[enemy][static_cast<std::size_t>(*slot)];
+                    }
+                }
+                AddTabTarget(tab, key, std::move(child), environment);
+            }
+        }
+
+        static EntryHoverTarget WeaponsTabTarget(SettingsManager& s, SpecWeaponsSection section)
+        {
+            auto tab = NewTabTarget("Specific Weapons");
+            tab.tabCollection = TabCollection::Weapons;
+            tab.tabSection = section;
+            const int previousEnvironment = s.categoriesEditTab;
+            const bool fp = section == SpecWeaponsSection::FirstPerson;
+            for (auto& binding : s.weaponBindings) {
+                if (binding.fpOnly != fp) continue;
+                auto count = SettingsManager::GetBindingSubStateCount(binding.category);
+                if (fp && binding.category == SettingsManager::BindingCategory::Melee) count = 10;
+                for (int environment = 0; environment < (fp ? 1 : SettingsManager::kEnvCount); ++environment) {
+                    s.categoriesEditTab = environment;
+                    for (std::size_t slot = 0; slot < count; ++slot)
+                        AddTabTarget(tab, BindingTabKey(binding) + "/state/" + std::to_string(slot),
+                            BindingClipboardTarget(s, binding, static_cast<int>(slot), section), environment);
+                    if (section == SpecWeaponsSection::Noise && binding.category == SettingsManager::BindingCategory::Spell) {
+                        for (std::size_t hand = 0; hand < SettingsManager::kMagicHandCount; ++hand) {
+                            EntryHoverTarget child;
+                            child.kind = EntryClipKind::Noise;
+                            child.ptr = &binding.HandNoiseFor(environment)[hand][3];
+                            child.enableFlag = &binding.handNoiseEnabled[hand][3];
+                            AddTabTarget(tab, BindingTabKey(binding) + "/casting/hand/" + std::to_string(hand),
+                                std::move(child), environment);
+                        }
+                    }
+                }
+            }
+            s.categoriesEditTab = previousEnvironment;
+            return tab;
+        }
+
+        static EntryHoverTarget AnimationsTabTarget(SettingsManager& s, SpecWeaponsSection section)
+        {
+            auto tab = NewTabTarget("Specific Animations");
+            tab.tabCollection = TabCollection::Animations;
+            tab.tabSection = section;
+            for (auto& entry : s.animationCameras) {
+                for (int environment = 0; environment < SettingsManager::kEnvCount; ++environment) {
+                    EntryHoverTarget child;
+                    const auto key = "animcam." + std::to_string(entry.uid);
+                    if (section == SpecWeaponsSection::Noise) {
+                        child.kind = EntryClipKind::Noise;
+                        child.ptr = &entry.NoiseFor(environment);
+                        child.noiseKey = key;
+                    } else {
+                        const bool tl = section == SpecWeaponsSection::TargetLock;
+                        child.kind = EntryClipKind::Camera;
+                        child.ptr = tl ? &entry.TlProfileFor(environment) : &entry.ProfileFor(environment);
+                        child.noiseKey = tl ? key + "|tl" : key;
+                    }
+                    AddTabTarget(tab, entry.animationPath, std::move(child), environment);
+                    if (section == SpecWeaponsSection::Noise) {
+                        EntryHoverTarget transition;
+                        transition.kind = EntryClipKind::Transitions;
+                        transition.ptr = &entry.ProfileFor(environment);
+                        AddTabTarget(tab, entry.animationPath + "/transitions", std::move(transition), environment);
+                    }
+                }
+            }
+            return tab;
+        }
+
+        template <class Tab>
+        static EntryHoverTarget CameraTabTarget(SettingsManager& s, const Tab& definition, bool targetLock)
+        {
+            if (std::string_view(definition.label) == "Specific Weapons")
+                return WeaponsTabTarget(s, targetLock ? SpecWeaponsSection::TargetLock : SpecWeaponsSection::Categories);
+            auto tab = NewTabTarget(definition.label);
+            const auto collect = [&](const auto& entries) {
+                for (const auto& entry : entries) {
+                    SettingsManager::MagicHandOverrideSet* hands = nullptr;
+                    if (entry.magicSchool >= 0 && entry.magicCast >= 0)
+                        hands = &(targetLock ? s.tlMagicHandOverrides : s.magicHandOverrides)
+                            [entry.magicSchool][entry.magicCast][entry.magicSneak ? 1 : 0];
+                    AddTabCamera(s, tab, entry.label, entry.profile, targetLock,
+                        entry.meleeOverrides, entry.enableFlag, hands);
+                    if (entry.paDirHost) {
+                        for (std::size_t direction = 0; direction < SettingsManager::kPowerAttackDirectionCount; ++direction)
+                            AddTabCamera(s, tab, std::string(entry.label) + "/direction/" + std::to_string(direction),
+                                &(targetLock ? s.tlWeaponsMeleePowerAttackDir : s.weaponsMeleePowerAttackDir)[direction],
+                                targetLock,
+                                &(targetLock ? s.tlWeaponsMeleePowerAttackDirOverrides : s.weaponsMeleePowerAttackDirOverrides)[direction],
+                                &(targetLock ? s.tlWeaponsMeleePowerAttackDirEnabled : s.weaponsMeleePowerAttackDirEnabled)[direction],
+                                nullptr, static_cast<int>(direction));
+                    }
+                    if (entry.shoutsStateIndex < 0) continue;
+                    const auto state = static_cast<std::size_t>(entry.shoutsStateIndex);
+                    auto& bases = targetLock ? (entry.shoutsIsSneak ? s.tlShoutsBaseByStateSneak : s.tlShoutsBaseByState) :
+                        (entry.shoutsIsSneak ? s.shoutsBaseByStateSneak : s.shoutsBaseByState);
+                    auto& profiles = targetLock ? (entry.shoutsIsSneak ? s.tlShoutOverrideByStateSneak : s.tlShoutOverrideByState) :
+                        (entry.shoutsIsSneak ? s.shoutOverrideByStateSneak : s.shoutOverrideByState);
+                    auto& enabled = targetLock ? (entry.shoutsIsSneak ? s.tlShoutOverrideByStateEnabledSneak : s.tlShoutOverrideByStateEnabled) :
+                        (entry.shoutsIsSneak ? s.shoutOverrideByStateEnabledSneak : s.shoutOverrideByStateEnabled);
+                    AddTabCamera(s, tab, std::string(entry.label) + "/base", &bases[state], targetLock);
+                    const auto slot = targetLock ? s.SlotFromTLProfile(&bases[state]) : std::nullopt;
+                    for (std::size_t shout = 0; shout < kShoutCount; ++shout)
+                        AddTabCamera(s, tab, std::string(entry.label) + "/" + kShouts[shout].tomlKey,
+                            &profiles[state][shout], targetLock, nullptr, &enabled[state][shout], nullptr, -1, slot);
+                }
+            };
+            collect(definition.entries);
+            collect(definition.secondaryEntries);
+            return tab;
+        }
+
+        // Tab headers use the same Copy/Paste hotkeys as entries. A context
+        // menu makes the complete-tab operation available without key binds.
+        template <class Build>
+        static void HandleTabClipboard(const char* label, Build&& build)
+        {
+            using namespace ImGuiMCP;
+            const bool hovered = ImGui::IsItemHovered() || PadItemIsCursor();
+            ImGui::PushID(label);
+            if (hovered && ImGui::IsMouseClicked(1)) ImGui::OpenPopup("##tab_clipboard");
+            const bool popup = ImGui::IsPopupOpen("##tab_clipboard");
+            if (hovered || popup) {
+                auto target = build();
+                if (!target.tabEntries.empty() || target.tabCollection != TabCollection::Entries) {
+                    if (hovered) sEntryHover = target;
+                    if (PadBeginPopupModal("##tab_clipboard", nullptr,
+                            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize)) {
+                        ImGui::Text("%s", label);
+                        ImGui::TextUnformatted("Includes both environments and nested overrides.");
+                        if (PadButton("Copy Tab")) {
+                            sEntryHover = target;
+                            EntryClipCopy();
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::SameLine();
+                        PadBeginDisabled(sEntryClip.kind != EntryClipKind::Tab);
+                        if (PadButton("Paste Tab")) {
+                            sEntryHover = target;
+                            EntryClipPaste();
+                            ImGui::CloseCurrentPopup();
+                        }
+                        PadEndDisabled();
+                        ImGui::SameLine();
+                        if (PadButton("Cancel")) ImGui::CloseCurrentPopup();
+                        PadEndPopup();
+                    }
+                }
+            }
+            ImGui::PopID();
+        }
+
         // Polled once per frame while any DDC page is rendering. The menu
         // pauses the game, so the engine's input events stop firing â€” the same
         // Win32 / XInput edge poll every other binder in this file uses.
@@ -3128,7 +3578,7 @@ namespace DietDrCamera
 
             // A binder is armed and waiting for the very next press â€” don't
             // also act on it, or binding Copy to a key would immediately copy.
-            if (binding || resumed) return;
+            if (binding || resumed || ImGui::GetIO()->WantTextInput) return;
             if (copyNow)  EntryClipCopy();
             if (pasteNow) EntryClipPaste();
         }
@@ -3249,6 +3699,156 @@ namespace DietDrCamera
             return (std::max)(1.0f, available.x);
         }
 
+        struct SliderNumberEdit
+        {
+            ImGuiMCP::ImGuiID id = 0;
+            const float* owner = nullptr; // identity only; never dereferenced across frames
+            int frame = -100;
+            bool focus = false;
+            char text[64]{};
+            char originalText[64]{};
+        };
+        static SliderNumberEdit sSliderNumberEdit;
+        static SliderNumberEdit sSliderNumberPending;
+
+        static SliderNumberEdit* EditingSliderNumber(const float* value)
+        {
+            using namespace ImGuiMCP;
+            const auto id = ImGui::GetID("##number");
+            for (auto* edit : { &sSliderNumberEdit, &sSliderNumberPending }) {
+                if (edit->id == id && edit->owner == value &&
+                    ImGui::GetFrameCount() - edit->frame <= 1) return edit;
+            }
+            return nullptr;
+        }
+
+        static void BeginSliderNumberEdit(const float* value, const char* format)
+        {
+            using namespace ImGuiMCP;
+            SliderNumberEdit next;
+            next.id = ImGui::GetID("##number");
+            next.owner = value;
+            next.frame = ImGui::GetFrameCount();
+            next.focus = true;
+            std::snprintf(next.text, sizeof(next.text), format, *value);
+            std::snprintf(next.originalText, sizeof(next.originalText), "%s", next.text);
+            // Activate the clicked field immediately, even when it renders
+            // before the one being left. Keep that previous editor separately
+            // until its row can commit through a live value pointer.
+            if (sSliderNumberEdit.id && sSliderNumberEdit.id != next.id &&
+                next.frame - sSliderNumberEdit.frame <= 1) {
+                sSliderNumberPending = sSliderNumberEdit;
+                sSliderNumberPending.focus = false;
+            } else {
+                sSliderNumberPending = {};
+            }
+            sSliderNumberEdit = next;
+        }
+
+        static float SliderNumberWidth(const char* text)
+        {
+            using namespace ImGuiMCP;
+            ImVec2 size{};
+            ImGui::CalcTextSize(&size, text, nullptr, false, -1.0f);
+            // InputText's caret is one pixel wide. Font-sized padding made the
+            // number look like a separate, oversized textbox at large UI scales.
+            return std::ceil(size.x) + 1.0f;
+        }
+
+        static bool DrawSliderNumberEdit(SliderNumberEdit& edit, float* value,
+            float minimum, float maximum, float width)
+        {
+            using namespace ImGuiMCP;
+            edit.frame = ImGui::GetFrameCount();
+            const bool takeFocus = std::exchange(edit.focus, false);
+            if (takeFocus) {
+                // The display button/track has already claimed this mouse
+                // press. Release its active AND hovered IDs so InputText can
+                // consume the same click and select everything this frame.
+                ImGui::ClearActiveID();
+                ImGui::SetHoveredID(0);
+            }
+            ImGui::SetNextItemWidth((std::max)(1.0f, width));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, kPadFlashAmber | 0xCC000000u);
+            ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+            const bool enter = ImGui::InputText("##number", edit.text,
+                sizeof(edit.text), ImGuiInputTextFlags_AutoSelectAll |
+                ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsScientific |
+                ImGuiInputTextFlags_NoHorizontalScroll,
+                nullptr, nullptr);
+            ImGui::PopItemFlag();
+            ImGui::PopStyleColor(4);
+            ImGui::PopStyleVar(2);
+            const auto rect = PadCurrentItemRect();
+            DrawCursorOutline(ImGui::GetWindowDrawList(), rect, kPadFlashAmber);
+            if (takeFocus) PadFlashRect(rect, kPadFlashAmber);
+            const bool cancel = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+            const bool clickAway = ImGui::IsMouseClicked(0) &&
+                !ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            const bool finish = &edit == &sSliderNumberPending || enter ||
+                (!takeFocus && (ImGui::IsItemDeactivated() || clickAway));
+            bool changed = false;
+            bool valid = true;
+            if (finish && !cancel) {
+                const auto parsed = ParseSliderValue(edit.text, minimum, maximum);
+                valid = parsed.has_value();
+                if (parsed && std::strcmp(edit.text, edit.originalText) != 0) {
+                    changed = *value != *parsed;
+                    *value = *parsed;
+                }
+            }
+            if (cancel || (finish && !valid)) PadFlashRect(rect, kPadFlashRed);
+            else if (changed) PadFlashRect(rect, kPadFlashGreen);
+            if (finish || cancel) edit = {};
+            return changed;
+        }
+
+        static void DrawEditableSliderLabel(const char* label, float* value,
+            float minimum, float maximum, const char* format)
+        {
+            using namespace ImGuiMCP;
+            ImGui::TextWrapped("%s:", label);
+            ImGui::SameLine(0.0f, ImGui::GetStyle()->ItemInnerSpacing.x);
+            char number[64];
+            std::snprintf(number, sizeof(number), format, *value);
+            auto* editing = EditingSliderNumber(value);
+            const float desiredWidth = SliderNumberWidth(editing ? editing->text : number);
+            ImVec2 available{};
+            ImGui::GetContentRegionAvail(&available);
+            if (available.x < desiredWidth) {
+                ImGui::NewLine();
+                ImGui::GetContentRegionAvail(&available);
+            }
+            const float width = (std::max)(1.0f, (std::min)(available.x, desiredWidth));
+            if (editing) {
+                DrawSliderNumberEdit(*editing, value, minimum, maximum, width);
+                return;
+            }
+            ImVec2 origin{};
+            ImGui::GetCursorScreenPos(&origin);
+            ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+            ImGui::InvisibleButton("##number_display", ImVec2(width, ImGui::GetFontSize()), 0);
+            ImGui::PopItemFlag();
+            const bool hovered = ImGui::IsItemHovered();
+            if (hovered) {
+                DrawCursorOutline(ImGui::GetWindowDrawList(), PadCurrentItemRect());
+                ImGui::SetTooltip("Click the value to type. Enter or click away to apply; Esc to cancel.");
+                if (ImGui::IsMouseClicked(0)) BeginSliderNumberEdit(value, format);
+            }
+            if (auto* edit = EditingSliderNumber(value)) {
+                ImGui::SetCursorScreenPos(origin);
+                DrawSliderNumberEdit(*edit, value, minimum, maximum, width);
+            } else {
+                ImGui::ImDrawListManager::AddText(ImGui::GetWindowDrawList(), origin,
+                    ImGui::GetColorU32(ImGuiCol_Text), number, nullptr);
+            }
+        }
+
         // Shared slider track used by EVERY slider in the UI. The thumb and the
         // on-bar value are derived purely from *value, so the control can never
         // rebound (there is no engine-side write to fight). Input model, the
@@ -3262,6 +3862,8 @@ namespace DietDrCamera
         {
             using namespace ImGuiMCP;
             ImGui::PushID(a_id);
+
+            const bool editingAtStart = drawValueText && EditingSliderNumber(value);
 
             // The value as the caller handed it to us. The return below is a
             // "the user is working this control" signal, and callers use it to
@@ -3280,12 +3882,32 @@ namespace DietDrCamera
             // Nav-invisible like every Pad* widget â€” see the wrapper
             // comment (SMF feeds pad buttons as nav keys every frame).
             ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
-            ImGui::InvisibleButton("##track", ImVec2(w, h), 0);
+            if (editingAtStart) ImGui::Dummy(ImVec2(w, h));
+            else ImGui::InvisibleButton("##track", ImVec2(w, h), 0);
             ImGui::PopItemFlag();
             const bool activated = ImGui::IsItemActivated();
             const bool active    = ImGui::IsItemActive();
             const bool hovered   = ImGui::IsItemHovered();
-            const int  padIdx    = PadRegisterItem();
+            const int  padIdx    = editingAtStart ? -1 : PadRegisterItem();
+
+            bool editNumber = editingAtStart;
+            bool numberHovered = false;
+            if (drawValueText && hovered && !editingAtStart) {
+                char number[32];
+                std::snprintf(number, sizeof(number), "%.2f", *value);
+                ImVec2 size{}, mouse{};
+                ImGui::CalcTextSize(&size, number, nullptr, false, -1.0f);
+                ImGui::GetMousePos(&mouse);
+                if (std::abs(mouse.x - (origin.x + w * 0.5f)) <= (size.x + 1.0f) * 0.5f &&
+                    std::abs(mouse.y - (origin.y + h * 0.5f)) <= size.y * 0.5f) {
+                    numberHovered = true;
+                    ImGui::SetTooltip("Click the value to type. Enter or click away to apply; Esc to cancel.");
+                    if (ImGui::IsMouseClicked(0)) {
+                        BeginSliderNumberEdit(value, "%.2f");
+                        editNumber = true;
+                    }
+                }
+            }
 
             const float wClamped = std::max(1.0f, w);
             auto cursorValue = [&]() -> float {
@@ -3300,7 +3922,7 @@ namespace DietDrCamera
             // nav-activate (which also sets ActiveId on this item) can't
             // teleport the value to wherever the idle mouse cursor sits.
             const bool lmbDown = ImGui::IsMouseDown(0);
-            if ((activated || active) && lmbDown) {
+            if ((activated || active) && lmbDown && !editNumber) {
                 *value = cursorValue();
             }
 
@@ -3309,7 +3931,7 @@ namespace DietDrCamera
             // holding repeats (see FeedGamepadNav) â€” and A again releases.
             // Grab identity is value + rect so a second box showing the
             // same float doesn't also highlight/step (see sPadGrabRect).
-            if (sPadConnected) {
+            if (sPadConnected && !editNumber) {
                 const PadItem trackRect = PadCurrentItemRect();
                 auto grabbedHere = [&]() {
                     return sPadGrabValue == value && PadSameItem(trackRect, sPadGrabRect);
@@ -3365,11 +3987,11 @@ namespace DietDrCamera
             // teleport). Latch onto this control on right-press so the drag
             // keeps working even when the cursor leaves the track â€” fine
             // drags cover a lot of mouse distance.
-            if (hovered && ImGui::IsMouseClicked(1)) {
+            if (hovered && !editNumber && ImGui::IsMouseClicked(1)) {
                 sRightDragTarget = value;
             }
             const bool rightDragging = (sRightDragTarget == value);
-            if (rightDragging && ImGui::IsMouseDown(1)) {
+            if (rightDragging && !editNumber && ImGui::IsMouseDown(1)) {
                 constexpr float kFineDragSensitivity = 0.10f;
                 const float pxRate = (max - min) / wClamped;
                 *value = std::clamp(*value + ImGui::GetIO()->MouseDelta.x * pxRate * kFineDragSensitivity, min, max);
@@ -3403,13 +4025,27 @@ namespace DietDrCamera
                 colThumb, rounding, 0);
 
             if (drawValueText) {
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "%.2f", *value);
-                ImVec2 ts;
-                ImGui::CalcTextSize(&ts, buf, nullptr, false, -1.0f);
-                ImGui::ImDrawListManager::AddText(dl,
-                    ImVec2(origin.x + (w - ts.x) * 0.5f, origin.y + (h - ts.y) * 0.5f),
-                    ImGui::GetColorU32(ImGuiCol_Text), buf, nullptr);
+                if (auto* edit = EditingSliderNumber(value)) {
+                    // Edit only the number, in place. The track and thumb stay
+                    // visible instead of turning the whole bar into a textbox.
+                    ImVec2 afterTrack{};
+                    ImGui::GetCursorScreenPos(&afterTrack);
+                    const float width = (std::min)(w, SliderNumberWidth(edit->text));
+                    ImGui::SetCursorScreenPos(ImVec2(origin.x + (w - width) * 0.5f,
+                        origin.y + (h - ImGui::GetFontSize()) * 0.5f));
+                    DrawSliderNumberEdit(*edit, value, min, max, width);
+                    ImGui::SetCursorScreenPos(afterTrack);
+                } else {
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "%.2f", *value);
+                    ImVec2 ts;
+                    ImGui::CalcTextSize(&ts, buf, nullptr, false, -1.0f);
+                    const ImVec2 position(origin.x + (w - ts.x) * 0.5f, origin.y + (h - ts.y) * 0.5f);
+                    ImGui::ImDrawListManager::AddText(dl, position,
+                        ImGui::GetColorU32(ImGuiCol_Text), buf, nullptr);
+                    if (numberHovered) DrawCursorOutline(dl,
+                        PadItem{position.x, position.y, position.x + ts.x, position.y + ts.y});
+                }
             }
 
             // Grab outline: amber while this track is grabbed for d-pad
@@ -3425,7 +4061,7 @@ namespace DietDrCamera
             // `|| moved` is the backstop: any path that wrote the value â€”
             // d-pad step, bumper jump, a future input source â€” reports as a
             // change even if it never looked "held".
-            return held || (*value != valueOnEntry);
+            return (!editNumber && held) || (*value != valueOnEntry);
         }
 
         // Compact-mode flag. The new Categories panel renders inside a
@@ -4115,12 +4751,8 @@ namespace DietDrCamera
             // valueFormat default is %.2f; callers that need extra precision
             // (e.g., dialogue speed sliders where 0.025-step tuning matters)
             // pass "%.3f" to surface the third decimal.
-            char displayLabel[128];
-            char fmt[64];
-            snprintf(fmt, sizeof(fmt), "%%s: %s", valueFormat);
-            snprintf(displayLabel, sizeof(displayLabel), fmt, label, *value);
             ImGui::SetWindowFontScale(ScaleLabel());
-            ImGui::TextWrapped("%s", displayLabel);
+            DrawEditableSliderLabel(label, value, min, max, valueFormat);
             ImGui::SetWindowFontScale(ScaleBody());
             if (ConsumeInlineReset(ScaleBody())) *value = vanillaDefault;
             // Keep Reset beside the value when it fits, otherwise on its own row.
@@ -4283,6 +4915,9 @@ namespace DietDrCamera
                     // and it is already a fixed-width auto-height modal. The
                     // track below is correspondingly narrower, identically on
                     // every row, so the column still reads straight.
+                    // Match every toggle to the compact row, including the
+                    // first one after the popup's larger heading.
+                    ImGui::SetWindowFontScale(ScaleBody());
                     PadCheckbox("##trans_row_en", a_items[i].en);
                     ImGui::SameLine(0, Sx(10.0f));
                     if (!*a_items[i].en) PadBeginDisabled();
@@ -4406,7 +5041,7 @@ namespace DietDrCamera
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
                 ImGui::SetWindowFontScale(1.4f);
-                PopupCenteredText("Transitions");
+                PopupCenteredText("Transition Override");
                 ImGui::Dummy(ImVec2(0, Sx(14.0f)));
                 // EVERY SETTING HAS ITS OWN TOGGLE (user request 2026-08-19).
                 // "Override All" — the old single "Enable Override" switch,
@@ -4435,9 +5070,10 @@ namespace DietDrCamera
                     // profile, and that wins over the entry's while locked onto
                     // them — one control, two layers, no second slider.
                     { "Aim Bias",       &edit->transitionAimBias,   0.0f,  1.5f, 0.01f, 1.0f, &edit->transitionSetAimBias },
+                    { "Pitch Bias",     &edit->transitionPitchBias, -1.5f, 1.5f, 0.01f, 0.0f, &edit->transitionSetPitchBias },
                 };
                 RenderTransitionSliderList("##entry_trans_grid", entryTrans,
-                                           a_showAimBias ? 8 : 7);
+                                           a_showAimBias ? 9 : 7);
                 // The master mirrors the seven every frame â€” the runtime gates
                 // and the amber button both still read transitionOverride.
                 edit->SyncTransitionOverride();
@@ -4453,6 +5089,8 @@ namespace DietDrCamera
                     edit->transitionAimBias   = 1.0f;
                     edit->SetTransitionAll(false);
                     edit->transitionSetAimBias = false;   // not part of SetTransitionAll
+                    edit->transitionPitchBias = 0.0f;
+                    edit->transitionSetPitchBias = false;
                     edit->SyncTransitionOverride();
                 } else if (btn == 2) {
                     ImGui::CloseCurrentPopup();
@@ -5986,6 +6624,8 @@ namespace DietDrCamera
         sPadGrabSeen = false;
         PadGrabClearShadow();
         sRightDragTarget = nullptr;
+        sSliderNumberEdit = {};
+        sSliderNumberPending = {};
         if (sEntryPasteDepth == 0) sEntryHover = {};
     }
 
@@ -6092,7 +6732,7 @@ namespace DietDrCamera
     void MenuUI::Init()
     {
         if (!SKSEMenuFramework::IsInstalled()) {
-            spdlog::warn("MenuUI: SKSE Menu Framework not installed, menu unavailable");
+            spdlog::warn("MenuUI: SKSE Menu Framework not loaded, menu unavailable");
             return;
         }
 
@@ -7181,21 +7821,42 @@ namespace DietDrCamera
         if (ImGui::BeginTabBar("##tl_tabs", kTabFlags)) {
             sTlPadTabs.Begin();
             // General â€” sliders + Reset All
-            if (sTlPadTabs.Item("General")) { sActiveTab = 0; ImGui::EndTabItem(); }
+            const bool generalActive = sTlPadTabs.Item("General");
+            HandleTabClipboard("General", [&] {
+                auto tab = NewTabTarget("General");
+                const auto add = [&](const char* key, float& value) {
+                    EntryHoverTarget child;
+                    child.kind = EntryClipKind::Scalar;
+                    child.ptr = &value;
+                    AddTabTarget(tab, key, std::move(child), 0);
+                };
+                add("Target Lock/Aim Bias", s.targetLockAimBias);
+                add("Target Lock/Looseness", s.targetLockTrackSeconds);
+                add("Target Lock/Acquire Duration", s.targetLockAcquireSwingSeconds);
+                add("Target Lock/Switch Speed", s.targetLockSwitchSpeed);
+                return tab;
+            });
+            if (generalActive) { sActiveTab = 0; ImGui::EndTabItem(); }
             // 8 category tabs
             for (int i = 0; i < (int)tabs.size(); ++i) {
-                if (sTlPadTabs.Item(tabs[i].label)) {
+                const bool active = sTlPadTabs.Item(tabs[i].label);
+                HandleTabClipboard(tabs[i].label, [&] { return CameraTabTarget(s, tabs[i], true); });
+                if (active) {
                     sActiveTab = kCategoryTabFirst + i;
                     ImGui::EndTabItem();
                 }
             }
             // Specific Weapons â€” shares s.weaponBindings with Categories,
             // edits the binding's tlProfiles slot per sub-state.
-            if (sTlPadTabs.Item("Specific Weapons")) {
+            const bool weaponsActive = sTlPadTabs.Item("Specific Weapons");
+            HandleTabClipboard("Specific Weapons", [&] { return WeaponsTabTarget(s, SpecWeaponsSection::TargetLock); });
+            if (weaponsActive) {
                 sActiveTab = kTLSpecificWeaponsTab;
                 ImGui::EndTabItem();
             }
-            if (sTlPadTabs.Item("Specific Animations")) {
+            const bool animationsActive = sTlPadTabs.Item("Specific Animations");
+            HandleTabClipboard("Specific Animations", [&] { return AnimationsTabTarget(s, SpecWeaponsSection::TargetLock); });
+            if (animationsActive) {
                 sActiveTab = kTLAnimTab;
                 ImGui::EndTabItem();
             }
@@ -8760,12 +9421,8 @@ namespace DietDrCamera
             ImGui::GetContentRegionAvail(&avail);
             const float availWidth = avail.x;
 
-            char displayLabel[128];
-            char fmt[64];
-            std::snprintf(fmt, sizeof(fmt), "%%s: %s", valueFormat);
-            std::snprintf(displayLabel, sizeof(displayLabel), fmt, label, *value);
             ImGui::SetWindowFontScale(1.6f);
-            ImGui::Text("%s", displayLabel);
+            DrawEditableSliderLabel(label, value, min, max, valueFormat);
             if (ConsumeInlineReset(1.6f)) *value = vanillaDefault;
             // Reset sits INLINE next to the value (user redesign 2026-08-15;
             // replaces the below-the-track button).
@@ -9947,11 +10604,6 @@ namespace DietDrCamera
                     ImGui::Dummy(ImVec2(0, Sx(12.0f)));
                 }
                 if (s.archeryTracingEnabled) {
-                    RenderCompactSlider("Smoothing", &s.archeryTracingSmoothTau,
-                                        0.01f, 0.30f, 0.005f, 0.06f);
-                    ImGui::SetWindowFontScale(1.4f);
-
-                    ImGui::Dummy(ImVec2(0, Sx(12.0f)));
                     ImGui::Text("Sneak Eye Position");
                     ImGui::Dummy(ImVec2(0, Sx(4.0f)));
                     RenderCompactSlider("Sneak Eye X", &s.sneakMeterOffsetX,
@@ -13252,6 +13904,73 @@ namespace DietDrCamera
             if (a_entry.noiseKey) return a_entry.noiseKey;  // FOV-only with explicit key
             return {};
         }
+
+        static EntryHoverTarget NoiseOrFirstPersonTabTarget(SettingsManager& s, const CategoryTab& definition, bool firstPerson)
+        {
+            if (std::string_view(definition.label) == "Specific Weapons")
+                return WeaponsTabTarget(s, firstPerson ? SpecWeaponsSection::FirstPerson : SpecWeaponsSection::Noise);
+            auto tab = NewTabTarget(definition.label);
+            const auto addNoise = [&](const std::string& label, const std::string& key,
+                SettingsManager::MeleeWeaponNoiseOverrides* melee = nullptr) {
+                if (key.empty()) return;
+                for (int environment = 0; environment < SettingsManager::kEnvCount; ++environment) {
+                    EntryHoverTarget child;
+                    child.kind = EntryClipKind::Noise;
+                    const auto found = s.StateNoiseFor(environment).find(key);
+                    child.ptr = found == s.StateNoiseFor(environment).end() ? &s.GlobalNoiseFor(environment) : &found->second;
+                    child.tabMapState = true;
+                    child.noiseKey = key;
+                    child.meleeNoiseOv = melee;
+                    AddTabTarget(tab, label, std::move(child), environment);
+                }
+            };
+            const auto collect = [&](const auto& entries) {
+                for (const auto& entry : entries) {
+                    const auto key = entry.noiseKey ? std::string(entry.noiseKey) : NoiseKeyForEntry(entry);
+                    if (firstPerson) {
+                        if (!entry.profile || entry.shoutsStateIndex >= 0 || key.empty()) continue;
+                        EntryHoverTarget child;
+                        child.kind = EntryClipKind::FirstPerson;
+                        const auto found = s.stateFirstPerson.find(key);
+                        child.ptr = found == s.stateFirstPerson.end() ? &s.firstPersonGlobal : &found->second;
+                        child.tabMapState = true;
+                        child.noiseKey = key;
+                        AddTabTarget(tab, entry.label, std::move(child), 0);
+                    } else if (entry.fxBeat >= 0) {
+                        EntryHoverTarget child;
+                        child.kind = EntryClipKind::FxBeat;
+                        child.ptr = &sKeyedHoverSentinel;
+                        child.fxBeatIdx = entry.fxBeat;
+                        AddTabTarget(tab, entry.label, std::move(child), 0);
+                    } else {
+                        addNoise(entry.label, key, entry.meleeNoiseOverrides);
+                        if (entry.magicSchool >= 0 && entry.magicCast >= 0) {
+                            for (std::size_t hand = 0; hand < SettingsManager::kMagicHandCount; ++hand) {
+                                const std::string suffix = std::string(".hand.") + SettingsManager::GetMagicHandTomlKey(hand);
+                                addNoise(std::string(entry.label) + suffix, key + suffix);
+                            }
+                        }
+                        if (entry.shoutsStateIndex >= 0) {
+                            const std::string prefix = std::string("shouts.") + kNoiseShoutKeys[entry.shoutsStateIndex] + ".";
+                            const std::string suffix = entry.shoutsIsSneak ? ".sneak" : "";
+                            for (const auto& shout : kShouts)
+                                addNoise(std::string(entry.label) + "/" + shout.tomlKey, prefix + shout.tomlKey + suffix);
+                        }
+                        if (entry.paDirHost) {
+                            for (std::size_t direction = 0; direction < SettingsManager::kPowerAttackDirectionCount; ++direction) {
+                                const auto found = NoisePtrToKey().find(&s.weaponsMeleePowerAttackDir[direction]);
+                                if (found != NoisePtrToKey().end())
+                                    addNoise(std::string(entry.label) + "/direction/" + std::to_string(direction), found->second,
+                                        &s.weaponsMeleePowerAttackDirNoiseOverrides[direction]);
+                            }
+                        }
+                    }
+                }
+            };
+            collect(definition.entries);
+            collect(definition.secondaryEntries);
+            return tab;
+        }
     }
 
     // Single pair table backing both QuickTune_CategoriesToTL (forward)
@@ -14080,8 +14799,10 @@ namespace DietDrCamera
             // box does not get it — aim bias is lock-on centring and would be
             // an inert row there. It also fills the exact gap that made the two
             // boxes different heights.
-            if (a_showAimBias)
+            if (a_showAimBias) {
                 row("Aim Bias",   &p->transitionAimBias,   &p->transitionSetAimBias,   0.0f, 1.5f);
+                row("Pitch Bias", &p->transitionPitchBias, &p->transitionSetPitchBias, -1.5f, 1.5f);
+            }
         }
     }
 
@@ -16361,7 +17082,7 @@ namespace DietDrCamera
                           tlEditComp,
                           tlContentY,
                           [&] { DrawQTTransitions(tlEditComp, /*aimBias=*/true); },
-                          qtTransRowY * 2.0f, /*rows=*/8);
+                          qtTransRowY * 3.0f, /*rows=*/9);
     }
 
     static void RenderCameraNoiseImpl()
@@ -16397,7 +17118,9 @@ namespace DietDrCamera
             std::vector<CategoryTab> tabs = BuildCategoryTabs(s);
             for (const auto& tab : tabs) {
                 ImGui::SetWindowFontScale(1.5f);
-                if (sNoisePadTabs.Item(tab.label)) {
+                const bool active = sNoisePadTabs.Item(tab.label);
+                HandleTabClipboard(tab.label, [&] { return NoiseOrFirstPersonTabTarget(s, tab, false); });
+                if (active) {
                     // Specific Weapons shares s.weaponBindings with
                     // Categories; the editor edits the binding's noise
                     // slot per sub-state.
@@ -17485,7 +18208,9 @@ namespace DietDrCamera
 
             // [CLIPCAM] Specific Animations tab: custom body, noise editor.
             ImGui::SetWindowFontScale(1.5f);
-            if (sNoisePadTabs.Item("Specific Animations")) {
+            const bool animationsActive = sNoisePadTabs.Item("Specific Animations");
+            HandleTabClipboard("Specific Animations", [&] { return AnimationsTabTarget(s, SpecWeaponsSection::Noise); });
+            if (animationsActive) {
                 RenderSpecificAnimationsTab(2);
                 ImGui::EndTabItem();
             }
@@ -18865,7 +19590,9 @@ namespace DietDrCamera
                 const CategoryTab& tab = *tabPtr;
 
                 ImGui::SetWindowFontScale(1.5f);
-                if (!sFpPadTabs.Item(tab.label)) continue;
+                const bool active = sFpPadTabs.Item(tab.label);
+                HandleTabClipboard(tab.label, [&] { return NoiseOrFirstPersonTabTarget(s, tab, true); });
+                if (!active) continue;
 
                 auto& sel = sSelByTab[tab.label];   // {0,0} default
                 const bool isSplit = !tab.secondaryEntries.empty();
@@ -19147,7 +19874,25 @@ namespace DietDrCamera
             // `shouts.<shoutTomlKey>[.sneak]`. Resolver priority:
             // per-shout override > Base > Global.
             ImGui::SetWindowFontScale(1.5f);
-            if (sFpPadTabs.Item("Shouts")) {
+            const bool shoutsActive = sFpPadTabs.Item("Shouts");
+            HandleTabClipboard("Shouts", [&] {
+                auto tab = NewTabTarget("Shouts");
+                for (const char* suffix : { "", ".sneak" }) {
+                    const auto add = [&](const std::string& key) {
+                        EntryHoverTarget child;
+                        child.kind = EntryClipKind::FirstPerson;
+                        child.noiseKey = key;
+                        child.tabMapState = true;
+                        const auto found = s.stateFirstPerson.find(key);
+                        child.ptr = found == s.stateFirstPerson.end() ? &s.firstPersonGlobal : &found->second;
+                        AddTabTarget(tab, key, std::move(child), 0);
+                    };
+                    add(std::string("shouts.base") + suffix);
+                    for (const auto& shout : kShouts) add(std::string("shouts.") + shout.tomlKey + suffix);
+                }
+                return tab;
+            });
+            if (shoutsActive) {
                 ImGui::Dummy(ImVec2(0, Sx(16.0f)));
 
                 PadNavBeginChild("##fp_shouts_body", ImVec2(0, 0),
@@ -19339,7 +20084,9 @@ namespace DietDrCamera
             // Camera Noise (s.weaponBindings); this tab edits each
             // binding's fpProfiles (FOV + noise, opt-in per sub-state).
             ImGui::SetWindowFontScale(1.5f);
-            if (sFpPadTabs.Item("Specific Weapons")) {
+            const bool weaponsActive = sFpPadTabs.Item("Specific Weapons");
+            HandleTabClipboard("Specific Weapons", [&] { return WeaponsTabTarget(s, SpecWeaponsSection::FirstPerson); });
+            if (weaponsActive) {
                 ImGui::Dummy(ImVec2(0, Sx(16.0f)));
                 RenderSpecificWeaponsTabBody(s, SpecWeaponsSection::FirstPerson);
                 ImGui::EndTabItem();
@@ -19391,7 +20138,9 @@ namespace DietDrCamera
         if (ImGui::BeginTabBar("##cat_tabs", kTabFlags)) {
             sCatPadTabs.Begin();
             for (int i = 0; i < tabCount; ++i) {
-                if (sCatPadTabs.Item(tabs[i].label)) {
+                const bool active = sCatPadTabs.Item(tabs[i].label);
+                HandleTabClipboard(tabs[i].label, [&] { return CameraTabTarget(s, tabs[i], false); });
+                if (active) {
                     sActiveTab  = i;
                     sCatAnimTab = false;
                     ImGui::EndTabItem();
@@ -19399,7 +20148,9 @@ namespace DietDrCamera
             }
             // [CLIPCAM] rightmost custom tab — not a CategoryTab, so it
             // renders its own body below instead of the shared one.
-            if (sCatPadTabs.Item("Specific Animations")) {
+            const bool animationsActive = sCatPadTabs.Item("Specific Animations");
+            HandleTabClipboard("Specific Animations", [&] { return AnimationsTabTarget(s, SpecWeaponsSection::Categories); });
+            if (animationsActive) {
                 sCatAnimTab = true;
                 ImGui::EndTabItem();
             }
