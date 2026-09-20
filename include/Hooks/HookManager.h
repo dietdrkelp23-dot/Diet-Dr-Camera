@@ -186,6 +186,13 @@ namespace DietDrCamera
         static void HookedTogglePOVUpdateHeldState(RE::TogglePOVHandler* a_this, const RE::ButtonEvent* a_event);
         static inline REL::Relocation<decltype(&HookedTogglePOVUpdateHeldState)> _originalTogglePOVUpdateHeldState;
 
+        // Camera-state input is separate from TogglePOVHandler. Preserve the
+        // current orbit across R3 release while chaining all other input work.
+        // The secondary vtable receives the PlayerInputHandler subobject.
+        static void HookedOrbitProcessButton(RE::PlayerInputHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data);
+        static inline REL::Relocation<decltype(&HookedOrbitProcessButton)> _originalOrbitProcessButton;
+        static inline REL::Relocation<decltype(&HookedOrbitProcessButton)> _originalHorseOrbitProcessButton;
+
     public:
         // Raw gamepad R3-release sink. Subscribes to the BSInputDeviceManager's
         // InputEvent source and fires PlayerCamera::ForceFirst/ThirdPerson

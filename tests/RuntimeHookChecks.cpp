@@ -87,7 +87,15 @@ namespace
             auto inspect=[&] {return InspectUIJob(job,0x1000,0x2000,0x3000,0x4000);};
             auto result=inspect();
             Check(result && result->branchOffset==11 && result->branchLength==(nearBranch?6:2) &&
-                result->executeConsole==0x5000, "recognize guarded UI and console sequence");
+                result->executeConsole==0x5000 && !result->alreadyDisabled, "recognize guarded UI and console sequence");
+            if (nearBranch) {
+                job[11]=0x90;
+                job[12]=0xE9;
+            } else job[11]=0xEB;
+            const auto disabled=inspect();
+            Check(disabled && disabled->alreadyDisabled && disabled->executeConsole==0x5000,
+                "identify another UI driver's unconditional branch without accepting it as native");
+            job=Job(nearBranch);
             job[nearBranch?12:11] ^= 1;
             Check(!inspect(), "reject inverted pause condition");
             job=Job(nearBranch);

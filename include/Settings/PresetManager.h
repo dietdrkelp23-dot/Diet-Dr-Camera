@@ -19,6 +19,8 @@ namespace DietDrCamera
 
         bool SavePreset(const std::string& name);
         bool UpdatePreset(const std::string& name);
+        // Always reloads the saved file, even for the active preset, so users
+        // can discard unsaved edits and return to their last explicit save.
         // By value, not const ref: LoadPreset's ResetAllToVanilla() clears
         // SettingsManager::activePresetName, so a caller passing that member
         // (e.g. the startup auto-load) would have its argument blanked

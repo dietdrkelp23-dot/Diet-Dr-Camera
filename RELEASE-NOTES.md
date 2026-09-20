@@ -1,3 +1,156 @@
+# Diet Dr Camera 1.2.0
+
+Adds automatic startup diagnostics for compatibility reports, expanded Damage
+Reaction and projectile flyby noise, Crowd Modifier, more Target Lock biases,
+and separate first-/third-person projectile tracing. Existing presets remain
+readable. See SUPPORT-LOGGING.md for the logs to include with a startup error;
+full gameplay compatibility across every runtime is still unverified.
+
+- Disable Crowd Modifier while paragliding and clear its stored adjustment.
+  Keep buffered diagnostics for update timing, follow corrections and wind
+  modulation; report after flight or on pause instead of during flight.
+
+- Match the Reset button size in Projectile Tracing, Death Camera and Ragdoll
+  Camera to Cinematic Effects, including both projectile-tracing views.
+
+- Add proximity-scaled flyby noise to NPC magic projectiles, including
+  firebolts, fireballs, ice spikes, Ice Storm and creature spit. Use the existing
+  NPC Magic amounts in each view; transformed casters retain Transformations
+  ownership. Support compatible mod projectiles through their spell/projectile
+  metadata. Keep dragon/centurion cinematic ownership, continuous streams and
+  instant beams separate. Player Repulse settings do not shape flyby noise.
+  Give magic twice the flyby radius and 50% higher base intensity than arrows:
+  600 units and 1.5 intensity versus 300 units and 1.0 for archery. Retain the
+  smooth distance falloff and each view's existing NPC Noise amounts.
+
+- Replace NPC bow/crossbow release noise with cinematic noise from passing
+  arrows and bolts. Closer passes are stronger, using the existing NPC Noise
+  Archery controls for each view. Player weapon noise and Repulse settings no
+  longer shape NPC archery noise. Wall stops and known player hits do not add
+  false flybys; repeated updates do not replay the same projectile.
+  Fix the initial implementation's flight gate to use native linear velocity,
+  increase its cinematic motion to a visible level, and report bounded flyby
+  diagnostics without requiring Verbose Logging.
+
+- Add a clear contact response and nearby cast noise for frostbite-spider spit.
+  Expand hostile magic reactions for webs, paralysis, resource drains and area
+  staggers, using the base game, DLC and Creation Club attack/effect records.
+  Preserve creature melee noise. Keep dragon breath and centurion/Forgemaster
+  breath under their dedicated cinematic noise controls, without generic NPC
+  noise doubling them. Continuous incoming damage remains smooth.
+
+- Simplify the Flee Framing and Damage Reaction descriptions. Expand incoming
+  creature reactions using UESP and the game's race/attack records: distinguish
+  frost atronach arms, heavy claws and bites, tusks, hooves/rams, tentacles,
+  mechanical weapons, ballista bolts and spirit contacts. Cover expansion and
+  Creation Club creature variants, including vampire lords, lurkers and bone
+  colossi. Keep the existing intensity controls and motion/recovery limits.
+- Improve startup diagnostics with Skyrim/SKSE and DLL build identification,
+  Address Library header details, loaded DLL versions and startup checkpoints.
+  Hook errors include relevant instruction bytes, expected/observed targets
+  and the log location. Keep three previous DDC logs across launches and use
+  a temporary log if the normal directory cannot be written. These diagnostics
+  work without enabling Verbose Logging. See SUPPORT-LOGGING.md for reporting.
+- Keep the preset detail card on the correct file after Save as New, Quick
+  Tune selection and renaming by tracking preset names instead of row indices.
+  Clicking any preset still reloads its latest save and discards unsaved edits.
+- Add third-person Crowd Modifier under Cinematic Effects. Independent Zoom
+  Intensity and FOV Intensity sliders control widening as nearby engaged enemies
+  accumulate, with distance weighting, wall checks and smooth recovery. Intensity
+  scales strength and crowd response; extra enemies contribute with diminishing
+  returns instead of reaching a fixed four-enemy ceiling.
+- Defer Cinematic Views pending a new implementation. Remove its menu, Quick
+  Tune controls and runtime from this build. Existing preset definitions remain
+  readable and writable for future use.
+- Persist preset selection, rename and deletion immediately, including when a
+  launcher opens SKSE Menu Framework without opening Skyrim's Journal. Track
+  direct framework window changes for menu navigation and preference saving.
+  Reviewed Risa All-In-One Menu 5.2 source and reproduced/fixed the selection
+  persistence gap. Reviewed SkyZoom's source without finding DDC file access.
+  The separate report of updated preset TOMLs reverting to defaults remains
+  unconfirmed; these repairs do not establish its cause.
+- Ignore non-damaging stat modifiers in Damage Reaction. Adamant's block
+  slowdown was being mistaken for a magic impact, producing an extra camera
+  kick when blocking. Real weapon/blocked contacts and damaging magic retain
+  their existing strength and motion.
+- Prevent R3 from resetting the native third-person and mounted camera orbit.
+  Target-lock input, held POV changes and other button handling still run.
+- Keep first-person cinematic and nearby-enemy noise on independent phases
+  with their own character settings. Entering block or changing the player's
+  noise profile no longer redirects those effects or retains their old motion
+  in a profile crossfade. Damage Reaction tuning is unchanged.
+- Split Projectile Tracing into Third Person and First Person sections using
+  the same separators as Cinematic Effects and the same control/text scale
+  as the Death and Ragdoll Camera tabs. Each view has
+  independent bow/crossbow and spell/staff toggles, reticle size/thickness and
+  sneak-eye offsets. Spell/staff tracing alone exposes the sneak-eye controls.
+  Preset format 11 carries older shared tuning into both views, then saves
+  independent values. View changes, toggle changes and preset/game loads clear
+  old tracing state.
+- Follow fired spell/staff projectiles by their native identity, position and
+  velocity, refreshing the remaining trajectory as enemies move. A predicted
+  arrival no longer starts a hit marker's settling timer: only an engine
+  contact supplies the final impact point. Lost projectiles disappear without
+  a fabricated impact. Zero-gravity spell previews use the same collision-
+  checked path as gravity-affected spells, including native parallel first-
+  person aim, and fired shots no longer inherit a stale preview endpoint.
+- Add Damage Reaction under Extras > Cinematic Effects, with separate first-
+  and third-person Intensity sliders. Motion and recovery are tuned automatically. Incoming
+  blades, blunt weapons, arrows, fire, frost, shock, poison and other damage
+  have distinct reactions. Greatswords, battleaxes and warhammers carry more
+  weight than one-handed weapons, and power attacks recoil more strongly.
+  Neither current/maximum health nor damage amount affects motion. Weapon hit
+  events trigger the effect directly, including blocked contacts. Projectile contacts
+  contribute their incoming trajectory; other hits use the damage source's
+  direction when known. Directional recoil is stronger in both views, especially
+  first person, and side hits deflect the view away from the incoming source.
+  First-person impacts retain their quick impact/recovery and have twice the
+  directional pitch/yaw travel, with restrained roll and fine texture.
+  Giant club/swipe/stomp attacks, centurion
+  axe/hammer hands, creature bites/claws/heavy blows and dragon bite/wing/tail
+  attacks have distinct responses. Centurion hand detection uses the active
+  attack clip; chops compress downward and mirrored sweeps follow the striking
+  arm. Unknown creature attacks retain a generic response. Duplicate spell
+  notifications in one impact are coalesced, and shield bashes are accepted.
+  Magic streams ease into continuous directional pressure with elemental sway
+  or vibration, then fade out smoothly. Repeated magic ticks
+  refresh contact without restarting the motion, and
+  overlapping impacts have bounded rotation with tighter first-person roll limits.
+  Both views default to off. Preset format 10 preserves each view's intensity;
+  the experimental Recovery, Direction and Texture keys are retired.
+- Remove the experimental Damage Reaction health reader and health-change hook.
+  Harmful magic applications produce consistent motion independent of tick
+  magnitude; healing and expiring beneficial effects produce none.
+- Controller hints on DDC sections now follow DDC's controls: D-pad Right
+  enters the page, B returns to sections, and bumpers switch tabs or make
+  larger slider adjustments. Copy, Paste and Quick Tune show their current
+  bindings; keyboard keys and stick clicks are identified explicitly. Each
+  binding and action share an outlined group, with clearer descriptions and
+  two-line layouts when space is limited. Copy/paste hints appear only over a
+  supported clipboard target and identify its contents, including transition,
+  location, weapon and enemy overrides, environments and entire tabs. Override
+  names match the buttons' wording and capitalization. Paste hints stay hidden
+  until something has been copied into the menu clipboard. Each action has a
+  fixed position and text size during navigation; hidden hints leave their
+  space empty, and longer labels do not move neighboring controls. Visible
+  boxes fit their current text without padding short bindings to longer ones.
+  Clipboard hints remain steady while scrolling selected list entries into view. Sliders
+  and Reset buttons show no clipboard hints. The existing footer space is reused
+  without adding scrolling. Other mods and framework settings retain the
+  framework's hints and input behavior.
+- Target Lock's General tab cannot be copied or pasted. Category tabs retain
+  their existing whole-tab clipboard controls.
+- Add Height Bias, Zoom Bias and FOV Bias wherever Target Lock Pitch Bias is
+  available, including Quick Tune and nested overrides. The order is Aim,
+  Height, Zoom, FOV, Pitch. Each new control defaults to disabled and zero.
+  Panels accommodate the extra controls without adding scrolling.
+- Like Pitch Bias, the effects increase as the locked target approaches, fade
+  out at 600 game units, and ease back to neutral when lock ends. Height moves
+  the camera vertically, Zoom changes camera distance, and FOV changes view
+  width. Existing zoom limits and collision handling still apply.
+- Preset format 9 preserves the new controls, disabled tuning and explicit
+  zero overrides. Earlier presets keep their existing camera behavior.
+
 # Diet Dr Camera 1.1.1
 
 - Whole-tab copying now treats the Sheathed and Unsheathed base rows as matching

@@ -1,11 +1,15 @@
 #include "PCH.h"
+#include "Hooks/ParaglideTrace.h"
 #include "Camera/HitShakeController.h"
+#include "Camera/DamageReactionController.h"
 #include "Hooks/RuntimeHooks.h"
 #include "Camera/CameraNoiseController.h"
 #include "Camera/CameraEffectClock.h"
 #include "Camera/ProfileSnapshot.h"
 #include "Camera/NpcNoise.h"
+#include "Camera/CreatureMagic.h"
 #include "Camera/NpcArchery.h"
+#include "Core/ProjectileFlyby.h"
 #include "Core/EffectFrame.h"
 #include "Camera/CameraController.h"
 #include "Camera/AnimationCameraController.h"
@@ -461,11 +465,10 @@ namespace DietDrCamera
         static std::chrono::steady_clock::time_point sVLArchetypeTp{};
 
         // ===================================================================
-        // NPC noise (Cinematic Effects → NPC Noise). One master slider scales
-        // every NPC-driven source; the entries themselves are the PLAYER's
-        // tuned ones — an NPC shout resolves the shout entry for the player's
-        // current state, an NPC concentration stream resolves the magic
-        // school entry, an NPC transformation reuses the transform entry.
+        // NPC noise (Cinematic Effects → NPC Noise). Separate amounts for
+        // each source and POV. Melee, magic, shouts and transformations reuse
+        // the matching tuned entries. Arrows/bolts use their own flyby texture
+        // at closest approach, independent of player weapon/noise profiles.
         // Ranges are internal (the slider is deliberately the only control).
         // SKSE's ActionEvent is player-only in practice, so NPC shouts come
         // from TESSpellCastEvent (a shout FIRES as its variation spell, for
@@ -503,6 +506,9 @@ namespace DietDrCamera
 
         struct NpcCasterMemory
         {
+            EventBeat castBeat;
+            NpcBeatParams castParams;
+            NpcNoise::CastTracker casts;
             EventBeat shoutBeat;
             NpcBeatParams shoutParams;
             RE::VOICE_STATE                       lastVoiceState = RE::VOICE_STATE::kNone;
@@ -510,14 +516,11 @@ namespace DietDrCamera
             std::chrono::steady_clock::time_point lastSeen{};
         };
         static std::unordered_map<RE::FormID, NpcCasterMemory> sNpcMemory;
+        bool RaceHasOwnCinematicShake(const RE::TESRace* race);
 
         struct NpcCombatMemory
         {
             NpcNoise::MeleeSwingTracker swings;
-            bool archerySneak = false;
-            bool archeryDrawing = false;
-            RE::FormID archeryWeapon = 0;
-            ItemBindings::EquippedItem archeryItem;
             EventBeat beat;
             NpcBeatParams params;
             EventBeat spellBeat;
@@ -530,16 +533,41 @@ namespace DietDrCamera
         };
         static std::unordered_map<RE::FormID, NpcCombatMemory> sNpcCombatMemory;
 
-        struct NpcArcheryShot
+        // A brief air-rush texture, independent of every player weapon/noise
+        // profile. Each pass competes in the cinematic loudest-wins pool.
+        static constexpr SettingsManager::CinematicShakeChar kNpcFlybyChar{
+            ProjectileFlyby::kRotation, ProjectileFlyby::kTranslation,
+            ProjectileFlyby::kDriftJitter, ProjectileFlyby::kRoughness, ProjectileFlyby::kDecay};
+        struct FlybyDiagnostics
         {
-            RE::ObjectRefHandle shooter;
-            bool crossbow = false;
-            RE::FormID weapon = 0;
-            RE::FormID projectile = 0;
-            RE::NiPoint3 pos{};
-            std::chrono::steady_clock::time_point fired{};
+            std::atomic<std::uint32_t> callbacks{0}, candidates{0}, eligible{0}, filtered{0}, contacts{0};
         };
-        NpcNoise::ArcheryShotQueue<NpcArcheryShot> sNpcArcheryShots;
+        struct NpcFlybys
+        {
+            explicit NpcFlybys(float range = ProjectileFlyby::kRange) : tracks(range) {}
+            ProjectileFlyby::Tracker tracks;
+            std::array<EventBeat, 64> beats{};
+            FlybyDiagnostics diagnostics;
+            double lastStatus = 0;
+            unsigned activationLogs = 0, statusLogs = 0, passLogs = 0, ownershipLogs = 0;
+            std::uint32_t previousCallbacks = 0;
+            void Reset() { tracks.Reset(); beats = {}; }
+        } sNpcArcheryFlybys, sNpcMagicFlybys{ProjectileFlyby::kMagicRange};
+        double FlybyNow()
+        {
+            return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+        void ResetNpcFlybys()
+        {
+            sNpcArcheryFlybys.Reset();
+            sNpcMagicFlybys.Reset();
+        }
+        struct NpcMagicShot {
+            RE::ObjectRefHandle shooter;
+            RE::FormID spell = 0, projectile = 0;
+            std::chrono::steady_clock::time_point fired;
+        };
+        NpcNoise::ArcheryShotQueue<NpcMagicShot> sNpcMagicShots;
 
         float NpcIntensity(NpcNoise::Source source, bool fp)
         {
@@ -927,7 +955,7 @@ namespace DietDrCamera
         // profile IS the texture.
         void TryArmNpcShout(RE::Actor* actor, std::uint32_t spell)
         {
-            if (!actor || !NpcSourceEnabled(NpcNoise::Source::Shouts)) return;
+            if (!actor || RaceHasOwnCinematicShake(actor->GetRace()) || !NpcSourceEnabled(NpcNoise::Source::Shouts)) return;
             auto* shout = actor->GetCurrentShout();
             if (shout && spell && std::none_of(std::begin(shout->variations), std::end(shout->variations),
                 [spell](const auto& variation) { return variation.spell && variation.spell->GetFormID() == spell; }))
@@ -952,44 +980,52 @@ namespace DietDrCamera
             }
         }
 
-        // NPC fire-and-forget release. Rides the shout beat slot: the two are
-        // the same shape (a one-shot at the caster) and an NPC cannot shout and
-        // sling a firebolt on the same frame, so one slot is enough and they
-        // stay loudest-wins against each other exactly like every other beat.
-        void TryArmNpcCast(int a_schoolIdx, const RE::NiPoint3& a_pos)
+        // School-less creature attacks reuse the corresponding magic tuning.
+        // Each caster owns a beat, so nearby simultaneous spits cannot replace
+        // one another. Cast events and projectile launches share a receipt.
+        void TryArmNpcCast(RE::Actor* actor, RE::MagicItem* magic, RE::FormID projectile = 0)
         {
-            auto&       s      = SettingsManager::GetSingleton();
-            const float npcInt = s.npcNoiseIntensity;
-            if (!NpcNoise::EnabledForEitherView(npcInt, s.npcNoiseIntensityFp) ||
-                a_schoolIdx < 0 || a_schoolIdx > 4) return;
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!actor || actor == player || actor->IsDead() || !actor->Is3DLoaded() || !player || !magic ||
+                CameraEffectClock::IsPaused() ||
+                RaceHasOwnCinematicShake(actor->GetRace()) || NpcFormOf(actor) != NpcNoise::Form::None ||
+                !NpcSourceEnabled(NpcNoise::Source::Magic) ||
+                actor->GetPosition().GetDistance(player->GetPosition()) >= kNpcNoiseRange ||
+                magic->GetCastingType() != RE::MagicSystem::CastingType::kFireAndForget) return;
+            const auto info = CreatureMagic::Describe(magic);
+            const int school = info.school;
+            if (school < 0 || school > 4 || !CreatureMagic::CastNoiseAllowed(
+                static_cast<int>(magic->GetCastingType()), static_cast<int>(magic->GetSpellType()),
+                static_cast<int>(magic->GetDelivery()), info)) return;
             // The player's own cell for this school's fire-and-forget, so an
             // NPC's fireball reads like your fireball. Nothing tuned there =
             // nothing here, which is the required degrade.
-            const std::string key = std::string("magic.") + kSchoolNames[a_schoolIdx] +
+            const std::string key = std::string("magic.") + kSchoolNames[school] +
                                     ".fire_and_forget";
             const auto* p = ResolveNoiseByKey(key);
             if (!p || p->amp <= 0.0001f) return;
-            sNpcShoutParams.intensity        = p->amp * npcInt * kNpcShoutBeatScale;
-            sNpcShoutParams.intensityFp      = p->amp * kNpcShoutBeatScale *
-                SettingsManager::GetSingleton().npcNoiseIntensityFp;
-            sNpcShoutParams.speed            = std::max(0.1f, p->speed);
-            sNpcShoutParams.range            = kNpcNoiseRange;
-            // Short: a release is a crack, not a held note like a shout.
-            sNpcShoutParams.hold             = 0.15f;
-            sNpcShoutParams.chr.rotShake     = p->tilt;
-            sNpcShoutParams.chr.posShake     = p->sway;
-            sNpcShoutParams.chr.driftJitter  = p->driftJitter;
-            sNpcShoutParams.chr.roughness    = p->roughness;
-            sNpcShoutParams.chr.fadeDuration = 0.45f;
-            sNpcShoutBeat.rearmPending = true;   // resume-not-restart
-            sNpcShoutBeat.pos          = a_pos;
-            sNpcShoutBeat.hasPos       = true;
-            sNpcShoutBeat.npcSource    = NpcNoise::Source::Magic;
-            static bool sLoggedCast = false;
-            if (!sLoggedCast) {
-                sLoggedCast = true;
-                spdlog::debug("[NPCNOISE] cast beat armed key={} amp={:.2f}",
-                             key, sNpcShoutParams.intensity);
+            const auto now = CameraEffectClock::Now();
+            auto& memory = sNpcMemory[actor->GetFormID()];
+            memory.lastSeen = now;
+            if (!memory.casts.Observe(magic->GetFormID(), projectile,
+                std::chrono::duration<double>(now.time_since_epoch()).count())) return;
+            ArmNpcProfile(memory.castBeat, memory.castParams, p, NpcNoise::Source::Magic,
+                actor->GetPosition(), kNpcNoiseRange, .15f, .45f);
+            static unsigned logged = 0;
+            if (logged++ < 64) spdlog::info("[NPCNOISE] cast actor={:08X} spell={:08X} projectile={:08X} entry={} armed={}",
+                actor->GetFormID(), magic->GetFormID(), projectile, key, memory.castBeat.rearmPending);
+        }
+
+        void PollNpcMagicShots()
+        {
+            std::array<NpcMagicShot, 32> shots;
+            const auto count = sNpcMagicShots.Drain(shots);
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto& shot = shots[i];
+                if (!NpcNoise::FreshArcheryShot(std::chrono::duration<float>(std::chrono::steady_clock::now()-shot.fired).count())) continue;
+                const auto owner = shot.shooter.get();
+                TryArmNpcCast(owner ? owner->As<RE::Actor>() : nullptr,
+                    RE::TESForm::LookupByID<RE::MagicItem>(shot.spell), shot.projectile);
             }
         }
 
@@ -1000,37 +1036,24 @@ namespace DietDrCamera
             int   domKey = -1;
         };
 
-        // Per-frame walk of the high-process actors: voiceState shout
-        // fallback + concentration-cast accumulation. Deliberately a SECOND
-        // walk beside the dragon scan — the two have disjoint gates and
-        // filter chains, and coupling them saves only the handle iteration.
-        // Does this race have its OWN Cinematic Effects source?
-        //
-        // Dragons and Dwarven Centurions each carry a per-source Intensity in
-        // Cinematic Effects (per view since 2026-09-06), so the generic NPC
-        // casting layer must not shake for them as well — its Intensity is a
-        // single POV-independent slider and knows nothing about those sources,
-        // so a centurion whose 1p Intensity is 0 still shook the first-person
-        // view through it. The dragon half of this test was already at the NPC
-        // scan; the centurion half was not, which is the bug (user, 2026-09-07:
-        // "dwarven centurion noise seems to be active in 1st person even though
-        // its 1st person intensity is 0" — the preset has no centurion _fp keys
-        // at all, and npc_noise intensity = 1.0).
-        //
-        // Same detection the cinematic scanner uses: the vanilla race form plus
-        // a name fallback for named/modded variants (Dawnguard's Forgemaster).
-        bool RaceHasOwnCinematicShake(const RE::TESRace* a_race)
+        // One owner definition for the cinematic scanner and every generic
+        // noise path. The exclusion does not depend on intensity: turning off
+        // a cinematic source must never activate a fallback noise layer.
+        // Stable race/rig identities also cover localized centurions and the
+        // Forgemaster without treating spheres or ballistae as centurions.
+        DamageReaction::Family CinematicFamily(const RE::TESRace* a_race)
         {
-            if (!a_race) return false;
-            if (a_race->HasKeywordString("ActorTypeDragon")) return true;
-            if (a_race->GetFormID() == 0x000241B4) return true;
-            if (const char* rname = a_race->GetName(); rname && rname[0]) {
-                std::string lower(rname);
-                for (auto& ch : lower)
-                    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-                if (lower.find("centurion") != std::string::npos) return true;
-            }
-            return false;
+            if (!a_race) return DamageReaction::Family::Other;
+            if (a_race->HasKeywordString("ActorTypeDragon")) return DamageReaction::Family::Dragon;
+            if (a_race->GetFormID() == 0x000241B4) return DamageReaction::Family::Centurion;
+            const auto* id = a_race->GetFormEditorID();
+            const auto* model = a_race->skeletonModels[0].GetModel();
+            return DamageReaction::CreatureFamily(id ? id : "", model ? model : "",
+                false, false, false, a_race->HasKeywordString("ActorTypeDwarven"));
+        }
+        bool RaceHasOwnCinematicShake(const RE::TESRace* race)
+        {
+            return NpcNoise::OwnsCinematicNoise(CinematicFamily(race));
         }
 
         void ArmNpcTransformationAction(RE::Actor* actor, NpcNoise::Action action)
@@ -1081,8 +1104,7 @@ namespace DietDrCamera
             auto& s = SettingsManager::GetSingleton();
             auto* lists = RE::ProcessLists::GetSingleton();
             if (!player || !lists ||
-                !(NpcSourceEnabled(NpcNoise::Source::Melee) || NpcSourceEnabled(NpcNoise::Source::Archery) ||
-                  NpcSourceEnabled(NpcNoise::Source::Transformations))) {
+                !(NpcSourceEnabled(NpcNoise::Source::Melee) || NpcSourceEnabled(NpcNoise::Source::Transformations))) {
                 sNpcCombatMemory.clear();
                 return;
             }
@@ -1164,21 +1186,6 @@ namespace DietDrCamera
                             key.empty() ? "unset" : key, profile ? profile->amp : 0.0f, memory.beat.rearmPending);
                     }
                 }
-                auto* equipped = actor->GetEquippedObject(false);
-                const auto* bow = equipped ? equipped->As<RE::TESObjectWEAP>() : nullptr;
-                const bool archery = bow && (bow->IsBow() || bow->IsCrossbow());
-                const bool drawing = attackState == State::kBowDraw || attackState == State::kBowAttached ||
-                                     attackState == State::kBowDrawn;
-                if (archery && drawing && !s.weaponBindings.empty() &&
-                    (!memory.archeryDrawing || memory.archeryWeapon != bow->GetFormID())) {
-                    memory.archeryWeapon = bow->GetFormID();
-                    memory.archeryItem = ItemBindings::DescribeEquipped(actor, false);
-                }
-                memory.archeryDrawing = archery && drawing;
-                const bool release = attackState == State::kBowReleasing || attackState == State::kBowReleased ||
-                                     attackState == State::kFire || attackState == State::kFiring || attackState == State::kFired;
-                if (archery && drawing) memory.archerySneak = state->IsSneaking();
-                else if (!release) memory.archerySneak = false;
                 if (form != NpcNoise::Form::None && NpcSourceEnabled(NpcNoise::Source::Transformations)) {
                     if (voice && !memory.voiceActive && form == NpcNoise::Form::Werewolf)
                         ArmNpcTransformationAction(actor, NpcNoise::Action::Roar);
@@ -1198,46 +1205,77 @@ namespace DietDrCamera
             std::erase_if(sNpcCombatMemory, [](const auto& entry) { return !entry.second.seen; });
         }
 
-        void PollNpcArcheryShots(RE::PlayerCharacter* player)
+        void PollNpcFlybys(RE::PlayerCharacter* player, bool fp, NpcFlybys& state, bool magic)
         {
-            std::array<NpcArcheryShot, 32> shots;
-            const auto count = sNpcArcheryShots.Drain(shots);
-            if (!player || !NpcSourceEnabled(NpcNoise::Source::Archery)) return;
-            const auto now = std::chrono::steady_clock::now();
+            const auto defaultSource = magic ? NpcNoise::Source::Magic : NpcNoise::Source::Archery;
+            const bool enabled = NpcIntensity(defaultSource, fp) > 0.0001f ||
+                (magic && NpcIntensity(NpcNoise::Source::Transformations, fp) > 0.0001f);
+            if (!player || player->IsDead() || !player->Is3DLoaded() || !player->GetParentCell() ||
+                CameraEffectClock::IsPaused() || !enabled) {
+                state.Reset();
+                return;
+            }
+            // Measure against the player's upper body, never a third-person
+            // camera which may be several metres behind or off to one side.
+            auto center = player->GetPosition();
+            center.z += player->GetHeight() * (player->IsSneaking() ? 0.45f : 0.65f);
+            const double now = FlybyNow();
+            const char* tag = magic ? "NPC-MAGIC-FLYBY" : "NPC-FLYBY";
+            if (state.tracks.Publish(fp ? 1 : 0, player->GetParentCell()->GetFormID(),
+                                     {center.x, center.y, center.z}, now)) {
+                state.beats = {};
+                if (state.activationLogs++ < 32)
+                    spdlog::info("[{}] tracking view={} intensity={:.2f} flybyGain={:.2f} radius={:.0f} center=({:.0f},{:.0f},{:.0f})",
+                        tag, fp ? "1p" : "3p", NpcIntensity(defaultSource, fp),
+                        magic ? ProjectileFlyby::kMagicIntensity : ProjectileFlyby::kIntensity, state.tracks.Range(),
+                        center.x, center.y, center.z);
+            }
+            // Default-level counters distinguish absent callbacks from filtered
+            // flight or an enabled source with no close passes. No per-tick spam.
+            const auto& diag = state.diagnostics;
+            const auto callbacks = diag.callbacks.load(std::memory_order_relaxed);
+            if (state.statusLogs < 12 && now-state.lastStatus >= 5.0 &&
+                (state.statusLogs == 0 || callbacks != state.previousCallbacks)) {
+                state.lastStatus = now; ++state.statusLogs;
+                state.previousCallbacks = callbacks;
+                spdlog::info("[{}] status callbacks={} candidates={} eligible={} filtered={} contacts={}",
+                    tag, callbacks, diag.candidates.load(std::memory_order_relaxed),
+                    diag.eligible.load(std::memory_order_relaxed), diag.filtered.load(std::memory_order_relaxed),
+                    diag.contacts.load(std::memory_order_relaxed));
+            }
+            std::array<ProjectileFlyby::Pass, 64> passes;
+            const auto count = state.tracks.Drain(now, passes);
             for (std::size_t i = 0; i < count; ++i) {
-                const auto& shot = shots[i];
-                if (!NpcNoise::FreshArcheryShot(std::chrono::duration<float>(now - shot.fired).count())) continue;
-                auto owner = shot.shooter.get();
-                auto* actor = owner ? owner->As<RE::Actor>() : nullptr;
-                if (!actor || actor == player || actor->IsDead() || !actor->Is3DLoaded() ||
-                    NpcFormOf(actor) != NpcNoise::Form::None || RaceHasOwnCinematicShake(actor->GetRace()) ||
-                    shot.pos.GetDistance(player->GetPosition()) >= kNpcNoiseRange) continue;
-                auto& memory = sNpcCombatMemory[actor->GetFormID()];
-                ItemBindings::EquippedItem item;
-                if (!SettingsManager::GetSingleton().weaponBindings.empty()) {
-                    if (memory.archeryWeapon == shot.weapon) item = memory.archeryItem;
-                    else {
-                        auto* weapon = RE::TESForm::LookupByID<RE::TESObjectWEAP>(shot.weapon);
-                        item = ItemBindings::DescribeForm(weapon);
-                        for (bool left : {false, true})
-                            if (weapon && actor->GetEquippedObject(left) == weapon) {
-                                item = ItemBindings::DescribeEquipped(actor, left);
-                                break;
-                            }
+                const auto& pass = passes[i];
+                auto source = defaultSource;
+                if (magic) {
+                    // Resolve ownership on the camera thread. Physics carries
+                    // only handles, never actors/races or live settings pointers.
+                    const auto shooter = RE::Actor::LookupByHandle(pass.shooter);
+                    auto* actor = shooter.get();
+                    if (!actor || actor->IsPlayerRef()) continue;
+                    if (RaceHasOwnCinematicShake(actor->GetRace())) {
+                        if (state.ownershipLogs++ < 8)
+                            spdlog::info("[NPC-MAGIC-FLYBY] dedicated cinematic source owns projectile={:08X} actor={:08X}",
+                                pass.projectile.form, actor->GetFormID());
+                        continue;
                     }
+                    source = NpcMagicSource(actor);
+                    if (NpcIntensity(source, fp) <= 0.0001f) continue;
                 }
-                std::string key;
-                const auto* profile = SettingsManager::GetSingleton().ResolveNpcArcheryNoise(
-                    shot.crossbow, actor->AsActorState()->IsSneaking() || memory.archerySneak, actor->IsOnMount(), item, &key);
-                ArmNpcProfile(memory.beat, memory.params, profile, NpcNoise::Source::Archery,
-                              shot.pos, kNpcNoiseRange, 0.0f, 0.3f);
-                static unsigned logged = 0;
-                if (logged < 24) {
-                    ++logged;
-                    spdlog::debug("[NPCNOISE] archery actor={:08X} projectile={:08X} weapon={:08X} type={} entry={} amp={:.2f} armed={}",
-                        actor->GetFormID(), shot.projectile, shot.weapon, shot.crossbow ? "crossbow" : "bow",
-                        key.empty() ? "unset" : key, profile ? profile->amp : 0.0f, memory.beat.rearmPending);
-                }
+                auto slot = std::find_if(state.beats.begin(), state.beats.end(),
+                    [](const auto& beat) { return !beat.active && !beat.rearmPending; });
+                if (slot == state.beats.end()) continue;
+                *slot = {};
+                slot->rearmPending = true;
+                slot->npcSource = source;
+                slot->armScale = pass.strength;
+                slot->pos = {pass.position.x, pass.position.y, pass.position.z};
+                slot->hasPos = true;
+                if (state.passLogs++ < 48)
+                    spdlog::info("[{}] pass projectile={:08X} type={} source={} view={} distance={:.1f} strength={:.3f}",
+                        tag, pass.projectile.form, magic ? "magic" : pass.bolt ? "bolt" : "arrow",
+                        static_cast<int>(source), fp ? "1p" : "3p", pass.distance, pass.strength);
             }
         }
 
@@ -1312,10 +1350,7 @@ namespace DietDrCamera
                                 sp->GetCastingType() !=
                                     RE::MagicSystem::CastingType::kConcentration)
                                 continue;
-                            int schoolIdx = -1;
-                            if (auto* eff = sp->GetCostliestEffectItem();
-                                eff && eff->baseEffect)
-                                schoolIdx = NpcSchoolIndex(eff->baseEffect->GetMagickSkill());
+                            const int schoolIdx = CreatureMagic::Describe(sp).school;
                             if (schoolIdx < 0) continue;
                             const auto sidx = static_cast<std::size_t>(schoolIdx);
                             const float w = ProximityFalloff(d, concRange);
@@ -1739,8 +1774,7 @@ namespace DietDrCamera
                     return RE::BSEventNotifyControl::kContinue;
                 auto* act = caster->As<RE::Actor>();
                 if (!act || act->IsDead()) return RE::BSEventNotifyControl::kContinue;
-                if (const auto* race = act->GetRace();
-                    race && race->HasKeywordString("ActorTypeDragon"))
+                if (RaceHasOwnCinematicShake(act->GetRace()))
                     return RE::BSEventNotifyControl::kContinue;
                 const auto pos = act->GetPosition();
                 if (!ShoutRegistry::GetSingleton().IsShoutSpell(a_event->spell)) {
@@ -1768,11 +1802,7 @@ namespace DietDrCamera
                     auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_event->spell);
                     if (!sp || sp->GetCastingType() != RE::MagicSystem::CastingType::kFireAndForget)
                         return RE::BSEventNotifyControl::kContinue;
-                    int schoolIdx = -1;
-                    if (auto* eff = sp->GetCostliestEffectItem(); eff && eff->baseEffect)
-                        schoolIdx = NpcSchoolIndex(eff->baseEffect->GetMagickSkill());
-                    if (schoolIdx < 0) return RE::BSEventNotifyControl::kContinue;
-                    TryArmNpcCast(schoolIdx, pos);
+                    TryArmNpcCast(act, sp);
                     return RE::BSEventNotifyControl::kContinue;
                 }
                 if (pos.GetDistance(player->GetPosition()) > kNpcNoiseRange * kNpcShoutRangeMul)
@@ -2122,6 +2152,9 @@ namespace DietDrCamera
                      sNpcShoutParams.hold, sNpcShoutParams.chr,
                       sNpcShoutParams.range, /*proximity=*/true, 0.0f, "npc-magic");
             for (auto& [_, memory] : sNpcMemory) {
+                const auto& cast = memory.castParams;
+                consider(memory.castBeat, cast.intensity * NpcIntensity(NpcNoise::Source::Magic, a_fp),
+                         cast.speed, cast.hold, cast.chr, cast.range, true, 0.0f, "npc-magic");
                 const auto& p = memory.shoutParams;
                 consider(memory.shoutBeat, p.intensity * NpcIntensity(NpcNoise::Source::Shouts, a_fp),
                          p.speed, p.hold, p.chr, p.range, true, 0.0f, "npc-shout");
@@ -2134,8 +2167,7 @@ namespace DietDrCamera
 
             for (auto& [_, memory] : sNpcCombatMemory) {
                 const auto& p = memory.params;
-                const char* source = memory.beat.npcSource == NpcNoise::Source::Archery ? "npc-archery" :
-                    memory.beat.npcSource == NpcNoise::Source::Transformations ? "npc-beast-attack" : "npc-melee";
+                const char* source = memory.beat.npcSource == NpcNoise::Source::Transformations ? "npc-beast-attack" : "npc-melee";
                 consider(memory.beat, p.intensity * NpcIntensity(memory.beat.npcSource, a_fp), p.speed,
                          p.hold, p.chr, p.range, true, 0.0f, source);
                 const auto& spell = memory.spellParams;
@@ -2143,6 +2175,14 @@ namespace DietDrCamera
                          spell.speed, spell.hold, spell.chr, spell.range, true, 0.0f, "npc-beast-magic");
             }
 
+            // Distance was measured at the actual pass. Do not attenuate it a
+            // second time using a changing player/archer position during decay.
+            for (auto& beat : sNpcArcheryFlybys.beats)
+                consider(beat, ProjectileFlyby::kIntensity * NpcIntensity(NpcNoise::Source::Archery, a_fp),
+                         ProjectileFlyby::kSpeed, 0.0f, kNpcFlybyChar, 0.0f, false, 0.0f, "npc-flyby");
+            for (auto& beat : sNpcMagicFlybys.beats)
+                consider(beat, ProjectileFlyby::kMagicIntensity * NpcIntensity(beat.npcSource, a_fp),
+                         ProjectileFlyby::kSpeed, 0.0f, kNpcFlybyChar, 0.0f, false, 0.0f, "npc-magic-flyby");
             return out;
         }
 
@@ -2300,23 +2340,9 @@ namespace DietDrCamera
                 if (!actor || actor == a_player) continue;
                 if (actor->IsDead()) continue;
 
-                auto* base = actor->GetActorBase();
-                if (!base || !base->race) continue;
-                auto* race = base->race;
-                const bool isDragon = race->HasKeywordString("ActorTypeDragon");
-                // Centurion filter — vanilla DwarvenCenturionRace
-                // (Skyrim.esm 0x000241B4) plus a name fallback to catch
-                // named/modded variants like Dawnguard's Forgemaster.
-                bool isCenturion = (race->GetFormID() == 0x000241B4);
-                if (!isCenturion) {
-                    const char* rname = race->GetName();
-                    if (rname && rname[0]) {
-                        std::string lower(rname);
-                        std::transform(lower.begin(), lower.end(), lower.begin(),
-                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                        if (lower.find("centurion") != std::string::npos) isCenturion = true;
-                    }
-                }
+                const auto family = CinematicFamily(actor->GetRace());
+                const bool isDragon = family == DamageReaction::Family::Dragon;
+                const bool isCenturion = family == DamageReaction::Family::Centurion;
                 if (!isDragon && !isCenturion) continue;
 
                 const auto& ap = actor->GetPosition();
@@ -2722,7 +2748,9 @@ namespace DietDrCamera
         {
             static void thunk(RE::TESCamera* a_camera)
             {
+                ParaglideTrace::Frame glideTrace(a_camera);
                 func(a_camera);
+                glideTrace.AfterChain();
                 // Shield-sprint injection cancel runs BEFORE the noise layers
                 // so they compose on the corrected pose. Same stage as every
                 // other 3p camera write in this mod — post TESCamera::Update,
@@ -2814,8 +2842,8 @@ namespace DietDrCamera
         //      go straight to this.
         //
         // Polled ONCE per frame, BEFORE the POV split, and consumed by both
-        // views — 3p swaps the ambient source to a jump profile, 1p folds the
-        // envelope into its own amp. Running the poll before the split is not
+        // views — 3p swaps the ambient source to a jump profile, 1p feeds an
+        // independent jump layer. Running the poll before the split is not
         // cosmetic: the launch trigger and the airborne latch are EDGE
         // detectors over per-frame statics (position delta, character-
         // controller state, graph-event counters). While this lived inside the
@@ -4359,10 +4387,80 @@ namespace DietDrCamera
                                             sLiveNoiseEditTp).count() < 0.5f;
     }
 
-    void CameraNoiseController::NotifyNpcArcheryShot(RE::ObjectRefHandle shooter, bool crossbow,
-        RE::FormID weapon, RE::FormID projectile, const RE::NiPoint3& pos)
+    void CameraNoiseController::NotifyNpcArcheryFlight(RE::Projectile* projectile, const RE::NiPoint3& pos,
+                                                       bool terminal, bool hitPlayer)
     {
-        sNpcArcheryShots.Push({shooter, crossbow, weapon, projectile, pos, std::chrono::steady_clock::now()}, projectile);
+        if (!projectile) return;
+        sNpcArcheryFlybys.diagnostics.callbacks.fetch_add(1, std::memory_order_relaxed);
+        if (!sNpcArcheryFlybys.tracks.Active()) return;
+        const auto& data = projectile->GetProjectileRuntimeData();
+        const auto shooter = data.shooter.get();
+        const bool npcOwned = shooter && shooter->IsActor() && !shooter->IsPlayerRef();
+        const bool archery = data.weaponSource && (data.weaponSource->IsBow() || data.weaponSource->IsCrossbow());
+        if (!npcOwned || !archery || !data.ammoSource) return;
+        sNpcArcheryFlybys.diagnostics.candidates.fetch_add(1, std::memory_order_relaxed);
+        const bool flying = data.flags.none(RE::Projectile::Flags::kProcessedImpacts, RE::Projectile::Flags::kDestroyed,
+                                            RE::Projectile::Flags::kFading);
+        const auto flightVelocity = ProjectileFlyby::FlightVelocity(data);
+        const bool eligible = terminal || ProjectileFlyby::Eligible(true, true, true, flying, flightVelocity,
+                                                                   data.flags.none(RE::Projectile::Flags::kMoved));
+        // Limited sample includes both fields to expose this exact integration
+        // error in an ordinary support log, without changing logging settings.
+        static std::atomic<unsigned> sampleLogs{0};
+        if (sampleLogs.load(std::memory_order_relaxed) < 24 && sampleLogs.fetch_add(1, std::memory_order_relaxed) < 24)
+            spdlog::info("[NPC-FLYBY] sample projectile={:08X} life={:.3f} flags={:08X} linearSpeed={:.1f} otherSpeed={:.1f} accepted={} contact={} playerHit={}",
+                projectile->GetFormID(), data.livingTime, data.flags.underlying(), std::sqrt(flightVelocity.Dot(flightVelocity)),
+                std::sqrt(data.velocity.x*data.velocity.x + data.velocity.y*data.velocity.y + data.velocity.z*data.velocity.z),
+                eligible, terminal, hitPlayer);
+        // A contact supplies the last observed segment even when the engine
+        // has already zeroed velocity or marked the projectile as impacted.
+        if (!eligible) { sNpcArcheryFlybys.diagnostics.filtered.fetch_add(1, std::memory_order_relaxed); return; }
+        sNpcArcheryFlybys.diagnostics.eligible.fetch_add(1, std::memory_order_relaxed);
+        if (terminal) sNpcArcheryFlybys.diagnostics.contacts.fetch_add(1, std::memory_order_relaxed);
+        sNpcArcheryFlybys.tracks.Observe({projectile->GetFormID(), projectile->GetHandle().native_handle()},
+            {pos.x, pos.y, pos.z}, data.livingTime, FlybyNow(), data.weaponSource->IsCrossbow(), terminal, hitPlayer);
+    }
+
+    void CameraNoiseController::NotifyNpcMagicFlight(RE::Projectile* projectile, const RE::NiPoint3& pos,
+                                                    bool terminal, bool hitPlayer)
+    {
+        if (!projectile) return;
+        auto& diag = sNpcMagicFlybys.diagnostics;
+        diag.callbacks.fetch_add(1, std::memory_order_relaxed);
+        if (!sNpcMagicFlybys.tracks.Active()) return;
+        const auto& data = projectile->GetProjectileRuntimeData();
+        const auto shooter = data.shooter.get();
+        if (!shooter || !shooter->IsActor() || shooter->IsPlayerRef() || data.ammoSource || !data.spell) return;
+        const auto* form = projectile->GetBaseObject();
+        const auto* base = form ? form->As<RE::BGSProjectile>() : nullptr;
+        if (!base) return;
+        diag.candidates.fetch_add(1, std::memory_order_relaxed);
+        const ProjectileFlyby::MagicProjectile magic{
+            static_cast<int>(data.spell->GetCastingType()), static_cast<int>(data.spell->GetDelivery()),
+            static_cast<int>(data.spell->GetSpellType()), base->data.types.underlying(), base->data.flags.underlying()};
+        // Cones such as Ice Storm continue through actor contacts. Missiles
+        // stop after processing an impact, with their final segment supplied
+        // separately by AddImpact. Very slow mod spells can still pass by.
+        const bool flying = data.flags.none(RE::Projectile::Flags::kDestroyed, RE::Projectile::Flags::kFading) &&
+            (base->IsCone() || data.flags.none(RE::Projectile::Flags::kProcessedImpacts));
+        const auto velocity = ProjectileFlyby::FlightVelocity(data);
+        const bool eligible = magic.Travels() && (terminal || ProjectileFlyby::InFlight(
+            flying, velocity, data.flags.none(RE::Projectile::Flags::kMoved), 1.0f));
+        static std::atomic<unsigned> sampleLogs{0};
+        if (sampleLogs.load(std::memory_order_relaxed) < 24 && sampleLogs.fetch_add(1, std::memory_order_relaxed) < 24)
+            spdlog::info("[NPC-MAGIC-FLYBY] sample projectile={:08X} base={:08X} spell={:08X} type={} cast={} life={:.3f} flags={:08X} linearSpeed={:.1f} accepted={} contact={} playerHit={}",
+                projectile->GetFormID(), base->GetFormID(), data.spell->GetFormID(), magic.type, magic.casting,
+                data.livingTime, data.flags.underlying(), std::sqrt(velocity.Dot(velocity)), eligible, terminal, hitPlayer);
+        if (!eligible) { diag.filtered.fetch_add(1, std::memory_order_relaxed); return; }
+        diag.eligible.fetch_add(1, std::memory_order_relaxed);
+        if (terminal) diag.contacts.fetch_add(1, std::memory_order_relaxed);
+        sNpcMagicFlybys.tracks.Observe({projectile->GetFormID(), projectile->GetHandle().native_handle()},
+            {pos.x, pos.y, pos.z}, data.livingTime, FlybyNow(), false, terminal, hitPlayer, data.shooter.native_handle());
+    }
+
+    void CameraNoiseController::NotifyNpcMagicShot(RE::ObjectRefHandle shooter, RE::FormID spell, RE::FormID projectile)
+    {
+        sNpcMagicShots.Push({shooter, spell, projectile, std::chrono::steady_clock::now()}, projectile);
     }
 
     void CameraNoiseController::NotifyNpcRaceChange(RE::Actor* actor)
@@ -4379,10 +4477,6 @@ namespace DietDrCamera
         memory.beat = {};
         memory.spellBeat = {};
         memory.swings = {};
-        memory.archerySneak = false;
-        memory.archeryDrawing = false;
-        memory.archeryWeapon = 0;
-        memory.archeryItem = {};
         memory.voiceActive = false;
         memory.form = form;
         memory.formKnown = true;
@@ -4502,29 +4596,11 @@ namespace DietDrCamera
         bool anyNoise = false;
         float appliedThetaSq1p = 0.0f;
         auto sampleLayer = [&](const FirstPersonNoiseLayer& layer, float weight) {
-            if (weight <= 0.0f || layer.amp <= 0.0001f) return;
-            constexpr float kFpRotShakeGain = 2.0f;
-            constexpr float kAxisScale = 6.2831853f;
-            const float baseR = layer.rot * kFpRotShakeGain * layer.amp;
-            const double rough = std::clamp(layer.roughness, 0.1f, 0.8f);
-            const float mix = std::clamp(layer.driftJitter, 0.0f, 1.0f);
-            const float theta1 = 0.00006f * baseR * (1.0f - 0.5f * mix) * weight;
-            const float theta2 = 0.00001f * baseR * (0.5f + mix) * weight;
-            appliedThetaSq1p += theta1 * theta1 + theta2 * theta2;
-            if (std::abs(theta1) > 1e-6f) {
-                const RE::NiPoint3 axis{
-                    static_cast<float>(perlinRotX.SampleFractal(layer.clock, 3, rough)) * kAxisScale,
-                    static_cast<float>(perlinRotY.SampleFractal(layer.clock + 7.1, 3, rough)) * kAxisScale,
-                    static_cast<float>(perlinRotZ.SampleFractal(layer.clock + 15.8, 3, rough)) * kAxisScale};
-                noiseRotation = noiseRotation * MatrixFromAxisAngle(axis, theta1);
-                anyNoise = true;
-            }
-            if (std::abs(theta2) > 1e-6f) {
-                const RE::NiPoint3 axis{
-                    static_cast<float>(perlinRotZ.SampleFractal(layer.clock * 2.2, 3, rough)) * kAxisScale,
-                    static_cast<float>(perlinRotX.SampleFractal(layer.clock * 2.2 + 4.2, 3, rough)) * kAxisScale,
-                    static_cast<float>(perlinRotY.SampleFractal(layer.clock * 2.2 + 9.6, 3, rough)) * kAxisScale};
-                noiseRotation = noiseRotation * MatrixFromAxisAngle(axis, theta2);
+            for (const auto& band : SampleFirstPersonNoise(layer, weight, perlinRotX, perlinRotY, perlinRotZ)) {
+                appliedThetaSq1p += band.theta * band.theta;
+                if (std::abs(band.theta) <= 1e-6f) continue;
+                const RE::NiPoint3 axis{band.axis[0], band.axis[1], band.axis[2]};
+                noiseRotation = noiseRotation * MatrixFromAxisAngle(axis, band.theta);
                 anyNoise = true;
             }
         };
@@ -4534,6 +4610,10 @@ namespace DietDrCamera
         fp1pOutgoing.Visit([&](const FirstPersonNoiseLayer& layer, float weight) {
             sampleLayer(layer, oldWeight * weight);
         });
+        // Source envelopes and phases live outside the player-profile fade.
+        // Raising a shield cannot capture/replay an ongoing enemy spell or
+        // move its waveform to the incoming blocking profile's new clock.
+        for (const auto& layer : fp1pSources.Get()) sampleLayer(layer, 1.0f);
         if (std::abs(a_pitchKickRad) > 1e-6f) {
             noiseRotation = noiseRotation * MatrixFromAxisAngle(a_kickAxis, a_pitchKickRad);
             anyNoise = true;
@@ -4551,15 +4631,9 @@ namespace DietDrCamera
         // the only instrument that measures the thing the word "jerk" means
         // — the one-frame change in the APPLIED rotation angle — and it has
         // been running as debug through several sessions with Verbose off,
-        // which is the trap [FPFALL] just fell into. prevRot is printed
-        // beside rot for attribution: the 1p jump fold raises rot to 2.7 and
-        // drops it back in ONE frame each way, at the max() crossover, while
-        // the AMP either side of that crossover is continuous and slewed. If
-        // a flagged frame shows rot stepping, the character swap is the jerk
-        // and the amp ramp is exonerated; if rot is flat and amp moved, it is
-        // the ramp; if both are flat and xfade moved, it is the crossfade
-        // re-arming (the tag flips 0->2 on the way in and 2->0 on the way
-        // out, twice inside one 0.30 s burst).
+        // which is the trap [FPFALL] just fell into. prevRot/rot now describe
+        // only the player profile. The angle energy also includes independent
+        // cinematic sources, whose envelope contributions are in [FPNOISE].
         //
         // Debounce 250 -> 120 ms so BOTH edges of a burst can be caught; cap
         // raised to 60 to match.
@@ -4780,7 +4854,11 @@ namespace DietDrCamera
     void CameraNoiseController::OnCameraUpdate(RE::TESCamera* a_camera)
     {
         CameraEffectClock::Sync();
-        const auto hitRotation = HitShakeController::Update(a_camera && a_camera->cameraRoot);
+        auto hitRotation = HitShakeController::Update(a_camera && a_camera->cameraRoot);
+        const auto damageRotation = DamageReactionController::Update(a_camera && a_camera->cameraRoot);
+        hitRotation.pitch += damageRotation.pitch;
+        hitRotation.yaw += damageRotation.yaw;
+        hitRotation.roll += damageRotation.roll;
         const bool hitActive = std::abs(hitRotation.pitch) > 1e-7f || std::abs(hitRotation.yaw) > 1e-7f ||
                                std::abs(hitRotation.roll) > 1e-7f;
         EnsureBowShotSubscription();
@@ -4790,7 +4868,7 @@ namespace DietDrCamera
         static std::uint32_t seenArrowCounter = 0;
         const bool arrowGraphRelease = seenArrowCounter != sArrowReleaseCounter;
         seenArrowCounter = sArrowReleaseCounter;
-        if (!a_camera || !a_camera->cameraRoot) return;
+        if (!a_camera || !a_camera->cameraRoot) { ResetNpcFlybys(); return; }
 
         // Lazy graph-sink subscription. Idempotent — sGraphSubscribed
         // guards repeat calls. Needs to be deferred to runtime because
@@ -4801,7 +4879,9 @@ namespace DietDrCamera
 
         auto& settings = SettingsManager::GetSingleton();
         if (settings.diagnosticSuspendOverrides) {
-            sNpcArcheryShots.SetActive(false);
+            ResetNpcFlybys();
+            sNpcMagicShots.SetActive(false);
+            for (auto& [_, memory] : sNpcMemory) { memory.castBeat = {}; memory.casts = {}; }
             hasLastTick = false;
             return;
         }
@@ -4847,13 +4927,19 @@ namespace DietDrCamera
         const bool tableBeatsActive = settings.AnyEventBeatActive() ||
                                       effBeatInt(4, 0.0f) > 0.0001f;
         const bool npcNoiseActive = NpcSourceEnabled(NpcNoise::Source::Magic) || NpcSourceEnabled(NpcNoise::Source::Shouts);
+        if (!NpcSourceEnabled(NpcNoise::Source::Magic))
+            for (auto& [_, memory] : sNpcMemory) { memory.castBeat = {}; memory.casts = {}; }
         if (!NpcSourceEnabled(NpcNoise::Source::Shouts))
             for (auto& [_, memory] : sNpcMemory) memory.shoutBeat = {};
         const bool npcCombatActive = NpcSourceEnabled(NpcNoise::Source::Melee) ||
-                                     NpcSourceEnabled(NpcNoise::Source::Archery) ||
                                      NpcSourceEnabled(NpcNoise::Source::Transformations);
         if (!npcCombatActive) sNpcCombatMemory.clear();
-        sNpcArcheryShots.SetActive(NpcSourceEnabled(NpcNoise::Source::Archery) && !CameraEffectClock::IsPaused());
+        const bool archeryFlybyActive = NpcSourceEnabled(NpcNoise::Source::Archery);
+        const bool magicFlybyActive = NpcSourceEnabled(NpcNoise::Source::Magic) || NpcSourceEnabled(NpcNoise::Source::Transformations);
+        const bool npcFlybyActive = archeryFlybyActive || magicFlybyActive;
+        if (!archeryFlybyActive || CameraEffectClock::IsPaused()) sNpcArcheryFlybys.Reset();
+        if (!magicFlybyActive || CameraEffectClock::IsPaused()) sNpcMagicFlybys.Reset();
+        sNpcMagicShots.SetActive(NpcSourceEnabled(NpcNoise::Source::Magic) && !CameraEffectClock::IsPaused());
         if (!NpcSourceEnabled(NpcNoise::Source::Transformations)) sNpcTransformBeat = {};
         const bool eventBeatsActive = effBeatInt(5, settings.vampireLordBatsIntensity) > 0.0001f ||
                                       settings.reanimateShakeIntensity   > 0.0001f ||
@@ -4863,6 +4949,7 @@ namespace DietDrCamera
                                       tableBeatsActive ||
                                       npcNoiseActive ||
                                       npcCombatActive ||
+                                      npcFlybyActive ||
                                       werewolfTransformActive ||
                                       vampireLordTransformActive;
         if (eventBeatsActive) EnsureMagicBeatSubscription();
@@ -4956,14 +5043,15 @@ namespace DietDrCamera
         }
         if (IsSuppressed(playerCam, transformShakeQueued)) {
             hasLastTick = false;
-            sNpcArcheryShots.SetActive(false);
+            ResetNpcFlybys();
+            sNpcMagicShots.SetActive(false);
             // Keep observed phases across menu/POV handoffs so an interrupted
             // swing does not become a fresh hit on return. Cancel its effect.
             for (auto& [_, memory] : sNpcCombatMemory) {
                 memory.beat = {};
                 memory.spellBeat = {};
             }
-            for (auto& [_, memory] : sNpcMemory) memory.shoutBeat = {};
+            for (auto& [_, memory] : sNpcMemory) { memory.shoutBeat = {}; memory.castBeat = {}; memory.casts = {}; }
             // Drop the 1p head bob outright: this branch returns before the
             // POV split, so without this the late hook would keep re-applying
             // the last frame's tilt for as long as the menu / cutscene holds
@@ -5073,17 +5161,20 @@ namespace DietDrCamera
         // the envelopes are time-based off an event latch that can arrive in
         // either view, and both branches below consume the winner.
         ScanNpcCombat(RE::PlayerCharacter::GetSingleton());
-        PollNpcArcheryShots(RE::PlayerCharacter::GetSingleton());
+        PollNpcFlybys(RE::PlayerCharacter::GetSingleton(), in1p, sNpcArcheryFlybys, false);
+        PollNpcFlybys(RE::PlayerCharacter::GetSingleton(), in1p, sNpcMagicFlybys, true);
+        PollNpcMagicShots();
         const EventBeatResult eventBeatNow =
             PollEventBeats(RE::PlayerCharacter::GetSingleton(), in1p);
         if (eventBeatNow.amp > 0.001f && eventBeatNow.src &&
-            (std::string_view(eventBeatNow.src) == "npc-archery" || std::string_view(eventBeatNow.src) == "npc-shout")) {
+            (std::string_view(eventBeatNow.src) == "npc-flyby" || std::string_view(eventBeatNow.src) == "npc-magic-flyby" ||
+             std::string_view(eventBeatNow.src) == "npc-shout")) {
             static unsigned logged = 0;
             static std::chrono::steady_clock::time_point lastLog{};
             const auto now = std::chrono::steady_clock::now();
             if (logged < 24 && std::chrono::duration<float>(now - lastLog).count() >= 0.5f) {
                 ++logged; lastLog = now;
-                spdlog::debug("[NPCNOISE] contributing source={} view={} amp={:.3f}",
+                spdlog::info("[NPCNOISE] contributing source={} view={} amp={:.3f}",
                     eventBeatNow.src, in1p ? "1p" : "3p", eventBeatNow.amp);
             }
         }
@@ -6507,26 +6598,24 @@ namespace DietDrCamera
             // in 1p with its 1p Intensity at 0" have now been shipped on
             // reasoning rather than a measurement, and the noise is still
             // there — so stop guessing and let the frame say which layer is
-            // feeding it. Every fold below records what it contributed; the
+            // feeding it. Every source below records what it contributed; the
             // line prints at the apply site.
             float dbgAmb = sFpAmpCurrent, dbgDrag = 0.0f, dbgJump = 0.0f,
                   dbgDraw = 0.0f, dbgAtk = 0.0f, dbgEvt = 0.0f, dbgNpc = 0.0f;
             float rot1p   = applyProfile ? applyProfile->noise.tilt        : 1.0f;
             float dj1p    = applyProfile ? applyProfile->noise.driftJitter : 0.35f;
             float rgh1p   = applyProfile ? applyProfile->noise.roughness   : 0.45f;
-            // Texture-identity tag for the 1p crossfade signature (0 = state
-            // profile, 1 = dragon source, 2 = jump source).
-            int fpSrcTag = 0;
-            if (dragonAmp1p > amp1p) {
+            FirstPersonNoiseSources::Layers fpSourceTargets{};
+            const auto source1p = [&](FirstPersonNoiseSources::Source source, float amp, float speed,
+                                      float rot, float dj, float roughness) {
+                fpSourceTargets[source] = {0, amp, speed, rot, dj, roughness};
+            };
+            constexpr int fpSrcTag = 0; // Only the player-state texture is crossfaded.
+            if (dragonAmp1p > 0.0001f) {
                 dbgDrag = dragonAmp1p;
-                amp1p   = dragonAmp1p;
-                speed1p = std::max(speed1p, dragonSpeed1p);
-                // Per-source character (1p is rotation-dominant, so Position
-                // Shake doesn't map here).
-                rot1p   = std::max(rot1p, sDragonShakeCharOut[1].rotShake);
-                dj1p    = sDragonShakeCharOut[1].driftJitter;
-                rgh1p   = sDragonShakeCharOut[1].roughness;
-                fpSrcTag = 1;
+                const auto& character = sDragonShakeCharOut[1];
+                source1p(FirstPersonNoiseSources::Dragon, dragonAmp1p, dragonSpeed1p,
+                    character.rotShake, character.driftJitter, character.roughness);
             }
 
             // ---- 1p <-> 3p AMP PARITY -------------------------------------
@@ -6539,7 +6628,7 @@ namespace DietDrCamera
             // same 1.00 renders in the Third Person half, which is what "they
             // don't seem to work for first person" was (user, 2026-09-06).
             //
-            // 3.0 rather than 3.33 because every other 1p fold in this branch
+            // 3.0 rather than 3.33 because every other 1p source in this branch
             // (dragon, shout, event, NPC) is calibrated on 3.0; matching them
             // matters more than the last 10%.
             //
@@ -6548,18 +6637,10 @@ namespace DietDrCamera
             // typed into either one means the same size of camera movement.
             constexpr float kFp1pAmpParity = 3.0f;
 
-            // Jumping (Cinematic Effects) in FIRST PERSON. Third person swaps
-            // the ambient source to the jump profile; 1p has no source-swap
-            // machinery, so the arc is folded in the same way the dragon /
-            // centurion shakes are — it WINS when it's louder than the state's
-            // own shake, and brings the jump character with it. Same 3x boost
-            // as the dragon path: the 1p rotation path uses a much smaller
-            // angle scale, so without it the identical Intensity reads about a
-            // third as strong here as it does in third person.
-            //
-            // The jump layer is rotation-led by design (tilt 2.7 / sway 1.2 in
-            // 3p); 1p is rotation-only, so only the tilt term carries over.
-            // env arrives PRE-SCALED by the Jumping / Falling dials.
+            // Jumping uses an independent first-person rotation layer, with
+            // the established follower and 3x angle-scale conversion. Its
+            // character no longer changes the player or nearby-enemy texture.
+            // env arrives pre-scaled by the Jumping / Falling dials.
             {
                 // SLEW-BOUND (2026-08-15, "jumping noise causes a noise snap
                 // in first person"): the launch burst steps env 0 -> ~2.6x
@@ -6601,30 +6682,15 @@ namespace DietDrCamera
                 // cap can never bound a fraction, because the fraction depends
                 // on the ambient it is landing on.
                 //
-                // CAP THE RENDERED RISE, NOT THE FOLLOWER'S. The first pass at
-                // this capped sFpJumpSm itself and killed the effect outright
-                // ("there's no jump noise now"): the fold only reaches the
-                // screen through `sFpJumpSm > amp1p`, so the follower must
-                // first climb all the way from 0 PAST the ambient before one
-                // unit of it is visible, and a rate tied to the ambient (25 u/s
-                // at amp 5.00) spends the whole 0.30 s burst just getting
-                // there — against a target that is collapsing the entire time.
-                // It never crossed, so nothing rendered.
-                //
-                // Below the ambient the follower is INVISIBLE, so it climbs
-                // free. Only the part that actually moves the rendered value is
-                // limited, and only on the way up: at most 5x the rendered amp
-                // per second (~8% per frame at 60 fps, a fifth of the
-                // pathological step), with a small absolute floor so a silent
-                // ambient can still get moving. From a 5.00 ambient that is
-                // 5.4 -> 5.8 -> 6.3 ... reaching the top of a max-dial burst
-                // inside its own 0.30 s window — just never in one frame.
+                // Retain the existing rise limit above the ambient baseline.
+                // It originally guarded a max-combined source; independent
+                // rendering now also permits the quieter part of the envelope
+                // to contribute without switching the player's texture.
                 constexpr float kFpJumpRelRise = 5.0f;    // x rendered amp / second
                 constexpr float kFpJumpAbsRise = 6.0f;    // amp units / second, floor
                 float newJumpSm = sFpJumpSm + jStep;
                 if (jStep > 0.0f && newJumpSm > amp1p) {
-                    // What the jump layer is rendering right now: the ambient
-                    // until the follower passes it, the follower after that.
+                    // Keep the previous baseline for this envelope's rise cap.
                     const float renderedNow = (std::max)(sFpJumpSm, amp1p);
                     const float jMaxRise =
                         (std::max)(kFpJumpAbsRise, kFpJumpRelRise * renderedNow);
@@ -6632,22 +6698,12 @@ namespace DietDrCamera
                 }
                 sFpJumpSm = newJumpSm;
                 if (sFpJumpSm < 0.001f) sFpJumpSm = 0.0f;
-                if (sFpJumpSm > amp1p) {
+                if (sFpJumpSm > 0.0001f) {
                     dbgJump = sFpJumpSm;
-                    amp1p   = sFpJumpSm;
-                    speed1p = std::max(speed1p, jumpArc.speedMul);
-                    rot1p   = std::max(rot1p, 2.7f);
-                    dj1p    = 0.62f;   // jitter-leaning — rushing air, not idle sway
-                    rgh1p   = 0.58f;
-                    fpSrcTag = 2;
+                    source1p(FirstPersonNoiseSources::Jump, sFpJumpSm, jumpArc.speedMul, 2.7f, .62f, .58f);
                 }
-                // [FPFALL] — "jumping and falling don't work for first
-                // person". env is pre-scaled by the 1p dials, so the dials are
-                // printed beside it: env==0 with a nonzero dial is an ARC
-                // problem, env==0 with a zero dial is just an unset slider, and
-                // a healthy env with rendered==ambient means the fold lost the
-                // max() to the state's own noise. INFO and capped: this ran as
-                // debug for a session with Verbose off and said nothing.
+                // Report the independently rendered jump envelope alongside
+                // the player amplitude; neither replaces the other anymore.
                 if (jumpArc.inAir) {
                     static std::chrono::steady_clock::time_point sFpFallLog{};
                     static int sFpFallProbe = 0;
@@ -6657,10 +6713,10 @@ namespace DietDrCamera
                         sFpFallLog = fnow;
                         ++sFpFallProbe;
                         spdlog::debug("[FPFALL] jumpDial={:.2f} fallDial={:.2f} env={:.2f} "
-                                     "foldAmp={:.2f} ambient={:.2f} rendered={:.2f} | "
+                                     "jumpAmp={:.2f} ambient={:.2f} | "
                                      "spd={:.0f} rushF={:.2f} windF={:.2f} clear={:.2f} ({}/60)",
                                      settings.jumpNoiseAmpFp, settings.fallNoiseAmpFp,
-                                     jumpArc.env, sFpJumpSm, sFpAmpCurrent, amp1p,
+                                     jumpArc.env, sFpJumpSm, sFpAmpCurrent,
                                      jumpArc.dbgSpeed, jumpArc.dbgRushF,
                                      jumpArc.dbgWindF, jumpArc.dbgClear,
                                      sFpFallProbe);
@@ -6668,13 +6724,8 @@ namespace DietDrCamera
                 }
             }
 
-            // --- 1p crossfade SIGNATURE, captured HERE: after the texture-
-            // identity swaps (state / dragon / jump), before the additive
-            // beat folds below — beats decorate the texture, they are not a
-            // texture change, and letting them into the signature would
-            // re-arm a crossfade on every beat. Raw values only (rot/dj/rgh
-            // straight off the source, not the eased renders), plus the
-            // resolved-entry pointer, which is what flips on a state change.
+            // Only the player-state texture participates in its profile fade.
+            // Cinematic sources above and below retain their own clocks.
             const int         fpSigTag = fpSrcTag;
             const float       fpSigRot = rot1p;
             const float       fpSigDj  = dj1p;
@@ -6686,38 +6737,17 @@ namespace DietDrCamera
             // changes (Quick Tune edits) that the pointer can't.
             const float       fpSigSpd = applyProfile ? applyProfile->noise.speed : 0.0f;
 
-            // Sheathing / Unsheathing beat in FIRST PERSON. 3p adds it as a
-            // separate additive layer on the crossfade; 1p has a single
-            // texture, so the beat is folded onto the amp the same way the
-            // dragon and jump layers are. Additive rather than max() here
-            // because the beat is explicitly punctuation ON TOP of whatever
-            // the state is already doing — that is the whole design of the
-            // effect — and 1p's single-sample path has no other way to express
-            // "swell the current texture".
-            //
-            // Its OWN Intensity / Speed / character, not the third-person
-            // ones (user request 2026-09-06: "sheathe/unsheathe should just
-            // have separate third person and first person sliders"), through
-            // kFp1pAmpParity so the number typed into the First Person half
-            // means the same size of movement the Third Person half's does.
-            // What used to be wrong here was not the factor but the single
-            // shared dial: one Intensity had to serve a view with a position
-            // channel at arm's length AND a rotation-only view on the eye.
+            // Draw/holster keeps its own per-view envelope and character.
             const float drawBeatAmp = drawBeatEnv * settings.weaponDrawNoiseIntensityFp;
             if (drawBeatAmp > 0.0001f) {
                 dbgDraw = drawBeatAmp * kFp1pAmpParity;
-                amp1p += dbgDraw;
-                rot1p  = std::max(rot1p, settings.weaponDrawNoiseCharFp.rotShake);
-                speed1p = std::max(speed1p,
-                                   std::max(0.1f, settings.weaponDrawNoiseSpeedFp));
-                if (settings.weaponDrawNoiseCharFp.driftJitter > 0.0f)
-                    dj1p  = settings.weaponDrawNoiseCharFp.driftJitter;
-                if (settings.weaponDrawNoiseCharFp.roughness > 0.0f)
-                    rgh1p = settings.weaponDrawNoiseCharFp.roughness;
+                const auto& character = settings.weaponDrawNoiseCharFp;
+                source1p(FirstPersonNoiseSources::Draw, dbgDraw, settings.weaponDrawNoiseSpeedFp,
+                    character.rotShake, character.driftJitter, character.roughness);
             }
 
             // Attack beat in FIRST PERSON. The cell is already a 1p entry, so
-            // unlike the dragon / jump / draw folds there is NO 3x view boost —
+            // unlike the dragon / jump / draw sources there is NO 3x view boost —
             // its Intensity means here exactly what it means in the menu.
             {
                 // 1p is rotation-only, so energy is amp x tilt.
@@ -6740,69 +6770,30 @@ namespace DietDrCamera
                     : 0.0f;   // see the note in `consider`: sAtkBeat is shared
                 if (atkEnv1p > 0.0001f) {
                     dbgAtk = sAtkCell.amp * atkEnv1p;
-                    amp1p  += dbgAtk;
-                    rot1p   = std::max(rot1p, sAtkCell.tilt);
-                    speed1p = std::max(speed1p, sAtkCell.speed);
-                    if (sAtkCell.driftJitter > 0.0f) dj1p  = sAtkCell.driftJitter;
-                    if (sAtkCell.roughness   > 0.0f) rgh1p = sAtkCell.roughness;
+                    source1p(FirstPersonNoiseSources::Attack, dbgAtk, sAtkCell.speed,
+                        sAtkCell.tilt, sAtkCell.driftJitter, sAtkCell.roughness);
                 }
             }
 
-            // Bats / Reanimation / Summoning in FIRST PERSON. Folded in
-            // exactly like the sheathe beat above — additive on the state's
-            // own texture, with the same 3x view boost the other cinematic
-            // sources use so an Intensity tuned in third person lands in the
-            // same place here. 1p is rotation-only, so only the character's
-            // Rotation Shake carries over.
             if (eventBeatNow.amp > 0.0001f && eventBeatNow.chr) {
                 constexpr float kFpEventBoost = 3.0f;
                 dbgEvt = eventBeatNow.amp * kFpEventBoost;
-                amp1p  += dbgEvt;
-                rot1p   = std::max(rot1p, eventBeatNow.chr->rotShake);
-                speed1p = std::max(speed1p, eventBeatNow.speed);
-                if (eventBeatNow.chr->driftJitter > 0.0f) dj1p  = eventBeatNow.chr->driftJitter;
-                if (eventBeatNow.chr->roughness   > 0.0f) rgh1p = eventBeatNow.chr->roughness;
+                source1p(FirstPersonNoiseSources::Event, dbgEvt, eventBeatNow.speed,
+                    eventBeatNow.chr->rotShake, eventBeatNow.chr->driftJitter, eventBeatNow.chr->roughness);
             }
 
-            // NPC concentration casting in FIRST PERSON.
             if (npcNow.amp * settings.npcNoiseIntensityFp > 0.0001f) {
                 constexpr float kFpNpcBoost = 3.0f;
                 dbgNpc = npcNow.amp * settings.npcNoiseIntensityFp * kFpNpcBoost;
-                amp1p  += dbgNpc;
-                rot1p   = std::max(rot1p, npcNow.tilt);
-                speed1p = std::max(speed1p, npcNow.speed);
-                if (npcNow.dj  > 0.0f) dj1p  = npcNow.dj;
-                if (npcNow.rgh > 0.0f) rgh1p = npcNow.rgh;
+                source1p(FirstPersonNoiseSources::NPC, dbgNpc, npcNow.speed, npcNow.tilt, npcNow.dj, npcNow.rgh);
             }
+            fp1pSources.Update(fpSourceTargets, dt, noiseDt * SlowTimeNoiseFactor(), pausedNoiseEdit);
 
-            // --- FLOW GOVERNOR — the last unbounded channel in 1p ------------
-            //
-            // Everything above may STEP the sample rate: the direct path sets
-            // it flat on the frame a cast begins, and every cinematic layer
-            // (dragon, jump, draw beat, event beats, proximity, NPC) rides it
-            // up with a bare max(). None of that was ever smoothed, and the
-            // rate is not a cosmetic parameter — the rendered angle is
-            // theta(t) = A · P(clock(t)), so its VELOCITY carries d(clock)/dt
-            // as a factor. Stepping the rate steps the angular velocity, which
-            // is felt as the view lurching into or out of motion even though
-            // the position itself never jumps. That is what was left of "the
-            // noise stops and then snaps back to moving" around a Repulse: at
-            // rest the clock ran at the idle cell's Speed, a cast slammed it to
-            // the cast cell's Speed in one frame, and the way back down was the
-            // amp spring's omega — the First Person Transition Speed slider,
-            // which at its low end is a 1.25s time constant, so the flow spent
-            // four seconds dying back to a crawl before the next cast snapped
-            // it awake again.
-            //
-            // So bound the slew here, at the render boundary, exactly the way
-            // batch 8 bounded the direct-path amp: one governor, downstream of
-            // every writer, on the value that is actually rendered. Fixed
-            // tempo, never the user's transition slider (the standing
-            // rate-floor lesson). Asymmetric — a beat may spin the texture up
-            // quickly, but it always winds down more gently than it wound up,
-            // which is what makes one event flow into the next instead of
-            // ending. The floor is applied to the TARGET so the governor can
-            // never be chasing a value the clock would clamp anyway.
+            // Smooth the player profile's sample rate separately from each
+            // cinematic source. A rate step changes angular velocity even
+            // when the current angle is continuous. Keep the fixed asymmetric
+            // governor independent of the user's profile-transition duration,
+            // with its minimum rate applied to the target as well as the clock.
             //
             // The attack floor lives here too. It used to reach the clock
             // through the amp spring's omega, which this governor replaced —
@@ -7181,7 +7172,7 @@ namespace DietDrCamera
             retunePausedValue(rot1p, sFpPreviousRotTarget, sFpRotSm);
             retunePausedValue(dj1p, sFpPreviousDjTarget, sFpDjSm);
             retunePausedValue(rgh1p, sFpPreviousRghTarget, sFpRghSm);
-            if (amp1p > 0.001f || std::abs(pitchKickRad) > 1e-6f || prevAudible) {
+            if (amp1p > 0.001f || std::abs(pitchKickRad) > 1e-6f || prevAudible || fp1pSources.Audible()) {
                 // TEXTURE fields eased too. The amp and rate ride the 1p
                 // spring, but rotation weight / drift / roughness used to
                 // swap RAW on every state change — amplitude glided while the
@@ -7486,29 +7477,9 @@ namespace DietDrCamera
                     const float alpha = 1.0f - std::exp(-dt / 0.25f);
                     sParaAltSm += alpha * (tgt - sParaAltSm);
                 }
-                // TEMPORARY [PARAALT] — the origin move puts the ray start
-                // INSIDE the player capsule, which the old placement was
-                // avoiding on principle. kCameraSphere is the layer camera
-                // collision uses precisely because it ignores the player, so
-                // this should be fine — but "should be" is not "is", and a
-                // self-hit reads as a permanently-zero clearance that would
-                // silently pin the glide texture to its 15% floor. Two
-                // signatures to look for: ground stuck near 0 while plainly
-                // high in the air (self-hit), or ground pinned at 600 through
-                // a whole descent (still missing). Half-second samples, hard
-                // capped. Strip once a glide has been flown and read.
-                {
-                    static float sParaAltDiagT = 0.0f;
-                    static int   sParaAltLogs  = 0;
-                    sParaAltDiagT += dt;
-                    if (sParaAltDiagT >= 0.5f && sParaAltLogs < 40) {
-                        sParaAltDiagT = 0.0f;
-                        ++sParaAltLogs;
-                        spdlog::info("[PARAALT] ground={:.0f} altMul={:.2f} playerZ={:.0f}",
-                                     ground, sParaAltSm,
-                                     player ? player->GetPosition().z : 0.0f);
-                    }
-                }
+                // Clearance and wind modulation are captured in memory by
+                // PARAGLIDE-TRACE and reported after the glide, avoiding the
+                // old periodic info-log flushes during flight.
                 // AIRSPEED FADE ("lessen the noise when not moving while
                 // paragliding"): the glide texture is WIND, so it should
                 // answer to how fast you are actually travelling — hanging
@@ -7522,6 +7493,7 @@ namespace DietDrCamera
                     static RE::NiPoint3 sPrevPos{};
                     static bool         sPrevInit = false;
                     float spd = 0.0f;
+                    bool windTeleportGuard = false;
                     if (player) {
                         const auto p = player->GetPosition();
                         if (sPrevInit && dt > 0.0001f) {
@@ -7530,6 +7502,7 @@ namespace DietDrCamera
                             const float dz = p.z - sPrevPos.z;
                             const float d  = std::sqrt(dx * dx + dy * dy + dz * dz);
                             if (d < 800.0f) spd = d / dt;   // teleport guard
+                            else windTeleportGuard = true;
                         }
                         sPrevPos = p; sPrevInit = true;
                     }
@@ -7545,6 +7518,7 @@ namespace DietDrCamera
                         const float aSpd = 1.0f - std::exp(-dt / 0.45f);
                         sParaSpdSm += aSpd * (tgtSpd - sParaSpdSm);
                     }
+                    ParaglideTrace::Wind(ground, sParaAltSm, sParaSpdSm, windTeleportGuard);
                 }
 
                 if (!sWasParaAlt) {

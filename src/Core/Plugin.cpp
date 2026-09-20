@@ -1,11 +1,13 @@
 #include "PCH.h"
 #include "Core/Version.h"
+#include "Core/Diagnostics.h"
 #include "Camera/VanityCamera.h"
 #include <Windows.h>
 #include "Camera/CameraNoiseController.h"
 #include "Camera/HitShakeController.h"
 #include "Camera/ArcheryHitShakeController.h"
 #include "Camera/MagicHitShakeController.h"
+#include "Camera/DamageReactionController.h"
 #include "Camera/CameraEffectClock.h"
 #include "Camera/StateResolver.h"
 #include "Hooks/ArrowPathDetour.h"
@@ -147,6 +149,7 @@ namespace
 
     void MessageCallback(SKSE::MessagingInterface::Message* a_msg)
     {
+        if (!a_msg) return;
         // Grass cache pre-generation: install nothing and hook nothing. This
         // returns before HookManager, the projectile detours, the Scaleform
         // pre-warmer, the menu, and the state resolver ever come up, so the
@@ -161,22 +164,38 @@ namespace
         }
         switch (a_msg->type) {
         case SKSE::MessagingInterface::kPostLoad:
+            DietDrCamera::Diagnostics::Checkpoint("PostLoad received; recording loaded DLLs");
+            DietDrCamera::Diagnostics::LogLoadedModules();
+            DietDrCamera::Diagnostics::Checkpoint("Validating instruction patch sites");
             DietDrCamera::RuntimeHooks::Prepare();
+            DietDrCamera::Diagnostics::Checkpoint("Reserving hook trampoline");
             DietDrCamera::HookTrampoline::Initialize();
+            DietDrCamera::Diagnostics::Checkpoint("Installing camera hooks");
             DietDrCamera::HookManager::GetSingleton().Install();
+            DietDrCamera::Diagnostics::Checkpoint("Initializing TDM integration");
             DietDrCamera::TDMIntegration::GetSingleton().OnPostLoad();
             // ArrowPathDetour rewritten as a vtable patch on
             // VTABLE_ArrowProjectile only — firebolt and other
             // non-arrow projectiles never enter our hook now, so the
             // previous function-entry trampoline crash on firebolt is
             // gone for good.
+            DietDrCamera::Diagnostics::Checkpoint("Installing arrow observers");
             DietDrCamera::ArrowPathDetour::Install();
             DietDrCamera::ArcheryHitShakeController::Install();
+            DietDrCamera::Diagnostics::Checkpoint("Installing spell observers");
             DietDrCamera::MissileProjectileDetour::Install();
             DietDrCamera::MagicHitShakeController::Install();
+            DietDrCamera::Diagnostics::Checkpoint("Installing damage reaction observers");
+            DietDrCamera::DamageReactionController::Install();
+            DietDrCamera::Diagnostics::Checkpoint("Initializing crosshair integration");
             DietDrCamera::CrosshairManager::GetSingleton().Init();
+            DietDrCamera::Diagnostics::Checkpoint("PostLoad complete");
+            break;
+        case SKSE::MessagingInterface::kPostPostLoad:
+            DietDrCamera::Diagnostics::Checkpoint("PostPostLoad received");
             break;
         case SKSE::MessagingInterface::kInputLoaded:
+            DietDrCamera::Diagnostics::Checkpoint("InputLoaded received");
             // Input sink goes in as EARLY as the input system allows.
             // BSTEventSource notifies sinks in REGISTRATION order, and DDC has
             // to see the right-stick click before True Directional Movement's
@@ -185,11 +204,14 @@ namespace
             // fires first, so any plugin registering there was already ahead of
             // us no matter what the DLLs are called.
             DietDrCamera::HookManager::InstallR3ReleaseSink();
+            DietDrCamera::Diagnostics::Checkpoint("InputLoaded complete");
             break;
         case SKSE::MessagingInterface::kDataLoaded:
             spdlog::info("Diet Dr Camera: data loaded");
+            DietDrCamera::Diagnostics::Checkpoint("DataLoaded: initializing game forms");
             DietDrCamera::ShoutRegistry::GetSingleton().Init();
             DietDrCamera::EnemyDetector::GetSingleton().Init();
+            DietDrCamera::Diagnostics::Checkpoint("DataLoaded: loading settings and active preset");
             DietDrCamera::SettingsManager::GetSingleton().Load();
             // Settings live in presets now — the global config holds only the
             // hotkeys + which preset was last active. Re-load that preset on
@@ -207,15 +229,18 @@ namespace
                     }
                 }
             }
+            DietDrCamera::Diagnostics::Checkpoint("DataLoaded: initializing SKSE Menu Framework integration");
             DietDrCamera::MenuUI::GetSingleton().Init();
             RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&MenuCloseSink::GetSingleton());
             spdlog::info("MenuCloseSink: registered for Journal Menu close events");
             DietDrCamera::HookManager::InstallR3ReleaseSink();   // no-op if kInputLoaded already did it
             DietDrCamera::DialogueInputSink::Install();
+            DietDrCamera::Diagnostics::Checkpoint("DataLoaded: installing unpaused-menu hooks");
             DietDrCamera::UnpauseManager::Install();
             // Scaleform views are created by the engine on its normal path.
             // Experimental async prewarming raced first opens and other views.
             DietDrCamera::StateResolver::GetSingleton().Register();
+            DietDrCamera::Diagnostics::Checkpoint("DataLoaded complete");
 
             // Warn if doodlum's Camera Noise is also loaded — we both touch
             // the same cameraRoot->local and the same shake GMSTs, they'll
@@ -228,39 +253,20 @@ namespace
             DietDrCamera::SettingsManager::GetSingleton().Save();
             break;
         case SKSE::MessagingInterface::kPreLoadGame:
+            DietDrCamera::Diagnostics::Checkpoint("PreLoadGame received; resetting camera state");
+            DietDrCamera::CrosshairManager::GetSingleton().ResetTracing();
             DietDrCamera::HitShakeController::Reset();
             DietDrCamera::VanityCamera::Reset();
             DietDrCamera::CameraEffectClock::Resume();
             DietDrCamera::HookManager::ResetMenuCameraAnimation();
             break;
+        case SKSE::MessagingInterface::kPostLoadGame:
+            DietDrCamera::Diagnostics::Checkpoint("PostLoadGame received");
+            break;
+        case SKSE::MessagingInterface::kNewGame:
+            DietDrCamera::Diagnostics::Checkpoint("NewGame received");
+            break;
         }
-    }
-
-    void SetupLog()
-    {
-        auto path = SKSE::log::log_directory();
-        if (!path) {
-            return;
-        }
-        *path /= "DietDrCamera.log";
-
-        auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
-        auto log = std::make_shared<spdlog::logger>("global log", std::move(sink));
-
-        // info by default; the per-frame diagnostics log at DEBUG and are
-        // therefore silent until Verbose Logging is switched on (see
-        // SettingsManager::ApplyLogLevel). Measured 2026-08-17 before this
-        // split: 7,051 lines in 5.5 minutes, ~273 KB/min, of which the
-        // verbose tags were ~85% — a three-hour session wrote ~50 MB and
-        // formatted strings every frame to do it.
-        log->set_level(spdlog::level::info);
-        // Flush on info, NOT on debug: an info line is rare enough that a
-        // flush per line is free and worth it for crash forensics, whereas
-        // flushing every verbose line would make Verbose Logging itself the
-        // performance problem it exists to diagnose.
-        log->flush_on(spdlog::level::info);
-
-        spdlog::set_default_logger(std::move(log));
     }
 }
 
@@ -283,12 +289,20 @@ SKSE_PLUGIN_QUERY(const SKSE::QueryInterface* skse, SKSE::PluginInfo* info)
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
-    SetupLog();
-    spdlog::info("Diet Dr Camera loaded");
+    if (!DietDrCamera::Diagnostics::InitializeLog()) return false;
+    if (!a_skse) {
+        spdlog::critical("[Startup] SKSE load interface is null; initialization stopped");
+        return false;
+    }
+    // Record the loader's version before NG initialization or any relocations
+    // can fail. The exact DDC PDB identity distinguishes builds with the same version.
+    DietDrCamera::Diagnostics::LogEnvironment(*a_skse);
+    DietDrCamera::Diagnostics::Checkpoint("SKSE initialization begin");
 
-    // Keep SetupLog's filename, format and flush policy; NG's default logger
+    // Keep our filename, format and flush policy; NG's default logger
     // would replace it and split startup diagnostics between two different files.
     SKSE::Init(a_skse, SKSE::InitInfo{ .log = false });
+    DietDrCamera::Diagnostics::Checkpoint("SKSE initialization complete");
 
     const auto runtime = REL::Module::get().version();
     if (!DietDrCamera::RuntimeVersion::IsKnown({runtime[0], runtime[1], runtime[2], runtime[3]})) {
@@ -308,9 +322,15 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
     }
 
     auto* messaging = SKSE::GetMessagingInterface();
-    if (messaging) {
-        messaging->RegisterListener(MessageCallback);
+    if (!messaging) {
+        spdlog::critical("[Startup] SKSE messaging interface is unavailable; no startup hooks can be registered");
+        return false;
     }
-
+    DietDrCamera::Diagnostics::Checkpoint("Registering SKSE message listener");
+    if (!messaging->RegisterListener(MessageCallback)) {
+        spdlog::critical("[Startup] SKSE messaging listener registration failed; initialization stopped");
+        return false;
+    }
+    DietDrCamera::Diagnostics::Checkpoint("SKSEPlugin_Load complete; waiting for PostLoad");
     return true;
 }

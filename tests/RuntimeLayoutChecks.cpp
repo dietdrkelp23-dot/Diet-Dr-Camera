@@ -35,18 +35,24 @@ int main(int argc, char** argv)
             auto* player=reinterpret_cast<RE::PlayerCharacter*>(storage.data());
             auto* graphics=reinterpret_cast<RE::BSGraphics::State*>(storage.data());
             auto* attack=reinterpret_cast<RE::AttackBlockHandler*>(storage.data());
+            auto* thirdPerson=reinterpret_cast<RE::ThirdPersonState*>(storage.data());
+            auto* orbitInput=static_cast<RE::PlayerInputHandler*>(thirdPerson);
             if (offset(&player->GetPlayerRuntimeData())!=layout.playerData ||
                 offset(&player->GetPlayerFlags())!=layout.playerFlags ||
                 offset(&graphics->GetLetterbox())!=layout.letterbox ||
                 offset(&attack->GetRuntimeData())!=layout.attackData ||
                 DietDrCamera::RuntimeHooks::InputSlot(4)!=layout.buttonSlot ||
-                DietDrCamera::RuntimeHooks::InputSlot(5)!=layout.buttonSlot+1)
+                DietDrCamera::RuntimeHooks::InputSlot(5)!=layout.buttonSlot+1 ||
+                offset(orbitInput)!=0x20 || static_cast<RE::ThirdPersonState*>(orbitInput)!=thirdPerson ||
+                offset(&thirdPerson->freeRotation)!=0xD4)
                 throw std::runtime_error("wrong runtime layout for "+layout.version.string());
         }
         if (DietDrCamera::RuntimeVersion::IsKnown({1,7,105,0}) || DietDrCamera::RuntimeVersion::IsKnown({1,4,15,0}))
             throw std::runtime_error("unknown or VR runtime accepted");
         std::cout << "SE, early AE, post-629 AE, GOG and 1.7 layout checks passed\n";
-        if (argc==4 && std::string_view(argv[1])=="--image") CheckRuntimeImage(argv[2],argv[3]);
+        if ((argc==4 || argc==5) && std::string_view(argv[1])=="--image")
+            CheckRuntimeImage(argv[2],argv[3],argc==5 ? argv[4] : "clean");
+        else if (argc!=1) throw std::runtime_error("usage: RuntimeLayoutChecks [--image executable address-library [scenario]]");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -9,13 +9,17 @@
 #include "Camera/EventBeatDefs.h"
 #include "Camera/NpcNoise.h"
 #include "Core/HitShake.h"
+#include "Core/DamageReaction.h"
 #include "Settings/CameraProfile.h"
 #include "Settings/PresetFormat.h"
+#include "Settings/ProjectileTracing.h"
 #include "Settings/CameraCollisionSettings.h"
 #include "Settings/Defaults.h"
 #include "Settings/DialogueLook.h"
 #include "Settings/MeleeWeaponOverrides.h"
 #include "Settings/ItemBindingIdentity.h"
+#include "Core/CombatFraming.h"
+#include "Core/CinematicViews.h"
 
 #include <vector>
 
@@ -164,6 +168,9 @@ namespace DietDrCamera
         // ignored on load.
 
         // Cinematic effects (Extras → Cinematic Effects).
+        CombatFraming::Tuning combatFraming{};
+        // Deferred feature: preserve stored definitions without activating them.
+        std::vector<CinematicViews::View> cinematicViews;
         // Dragons — five independent shake triggers fired by nearby
         // dragons, each with its own enable + amp + speed + range.
         // Camera Noise base is independent — these layer on top.
@@ -496,6 +503,9 @@ namespace DietDrCamera
         // 0 = off, 1 = preserve normal distance at walking/running approach speeds.
         float fleeFramingStrength = 0.0f;
 
+        // Incoming damage feedback, independently tuned for each view.
+        DamageReaction::Tuning damageReaction, damageReactionFp;
+
         // Per-source cinematic-shake "character" — the shouts Camera Noise
         // sliders minus Breathing. rotShake = Rotation Shake (rotation weight),
         // posShake = Position Shake (translation weight), driftJitter 0..1
@@ -680,6 +690,7 @@ namespace DietDrCamera
         // Separate from NPC magic, with independent POV amounts; opt-in.
         float npcMeleeNoiseIntensity = 0.0f;    // 0..3
         float npcMeleeNoiseIntensityFp = 0.0f;  // 0..3
+        // Passing arrows/bolts use their own cinematic texture and distance falloff.
         float npcArcheryNoiseIntensity = 0.0f;    // 0..3
         float npcArcheryNoiseIntensityFp = 0.0f;  // 0..3
         // Both beast forms, including transformation/revert and combat noise.
@@ -810,6 +821,16 @@ namespace DietDrCamera
         // negative Y = upward.
         float sneakMeterOffsetX = -500.0f;
         float sneakMeterOffsetY = -100.0f;
+
+        // Existing keys remain the third-person settings. Format 11 gives
+        // first person its own values; older presets seed both views alike.
+        ProjectileTracingSettings projectileTracingFp;
+        ProjectileTracingSettings GetProjectileTracing(bool firstPerson) const
+        {
+            return firstPerson ? projectileTracingFp : ProjectileTracingSettings{
+                archeryTracingEnabled, spellTracingEnabled, projectileReticleSizeScale,
+                projectileReticleThickness, sneakMeterOffsetX, sneakMeterOffsetY};
+        }
 
         // Diagnostic flag (NOT persisted): when true, every camera-override
         // path in the plugin short-circuits so the camera renders pure
@@ -1338,8 +1359,6 @@ namespace DietDrCamera
         [[nodiscard]] const NoiseProfile* ResolveNpcMeleeNoise(bool power, bool sneak, bool sprint,
             MeleeWeaponType weapon, int direction = -1, const ItemBindings::EquippedItem& item = {},
             std::string* outKey = nullptr);
-        [[nodiscard]] const NoiseProfile* ResolveNpcArcheryNoise(bool crossbow, bool sneak, bool mounted,
-            const ItemBindings::EquippedItem& item = {}, std::string* outKey = nullptr);
         [[nodiscard]] const NoiseProfile* ResolveNpcShoutNoise(std::string_view bucket, std::string_view shoutKey,
             bool sneak, const ItemBindings::EquippedItem& shout = {}, std::string* outKey = nullptr);
         [[nodiscard]] const NoiseProfile* ResolveNpcTransformationNoise(NpcNoise::Form form, NpcNoise::Action action);
@@ -3037,7 +3056,7 @@ namespace DietDrCamera
                 return t.sideOffset != d.sideOffset || t.height != d.height ||
                        t.zoom != d.zoom || t.fov != d.fov ||
                        t.rotation != d.rotation || t.pitchOffset != d.pitchOffset ||
-                       t.transitionSetPitchBias;
+                       t.ProximityBiasAnySet();
             }
         };
         std::vector<AnimationCameraEntry> animationCameras;

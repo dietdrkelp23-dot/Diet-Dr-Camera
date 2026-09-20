@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
     DietDrCamera
-    VERSION 1.1.1
+    VERSION 1.2.0
     LANGUAGES CXX
 )
 
@@ -46,6 +46,14 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
     src/*.cpp
 )
 
+# Cinematic Views is deferred. Keep its implementation for future work, but
+# exclude its runtime and picker from the shipping DLL. The preset codec stays
+# available so existing definitions survive loading and saving other settings.
+list(REMOVE_ITEM SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/Camera/CinematicViewController.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/Camera/CinematicViewPicker.cpp"
+)
+
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS
     include/*.h
     include/*.hpp
@@ -72,6 +80,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     fmt::fmt
     spdlog::spdlog
     nlohmann_json::nlohmann_json
+    version
 )
 
 target_precompile_headers(${PROJECT_NAME} PRIVATE
@@ -163,6 +172,12 @@ if(DDC_BUILD_CHECKS)
     add_test(NAME ReleasePackagingChecks COMMAND powershell -NoProfile -ExecutionPolicy Bypass
         -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/ReleasePackagingChecks.ps1"
         -PackageScript "${CMAKE_CURRENT_SOURCE_DIR}/tools/package-release.ps1")
+    if(MSVC)
+        add_test(NAME RuntimeBinaryChecks COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/RuntimeBinaryChecks.ps1"
+            -Dll "$<TARGET_FILE:DietDrCamera>" -Pdb "$<TARGET_PDB_FILE:DietDrCamera>"
+            -Version "${PROJECT_VERSION}" -Verifier "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify-release-binary.ps1")
+    endif()
     add_executable(TrampolineChecks tests/TrampolineChecks.cpp src/Hooks/HookTrampoline.cpp)
     target_include_directories(TrampolineChecks PRIVATE include)
     target_compile_definitions(TrampolineChecks PRIVATE ENABLE_COMMONLIBSSE_TESTING=1)
@@ -175,10 +190,16 @@ if(DDC_BUILD_CHECKS)
     target_include_directories(RuntimeHookChecks PRIVATE include extern/minhook/src/hde)
     target_link_libraries(RuntimeHookChecks PRIVATE CommonLibSSE::CommonLibSSE nlohmann_json::nlohmann_json)
     add_test(NAME RuntimeHookChecks COMMAND RuntimeHookChecks)
-    add_executable(RuntimeLayoutChecks tests/RuntimeLayoutChecks.cpp src/Hooks/RuntimeHooks.cpp src/Hooks/RuntimePatchInspection.cpp)
-    target_include_directories(RuntimeLayoutChecks PRIVATE include extern/minhook/src/hde)
+    add_executable(DiagnosticsChecks tests/DiagnosticsChecks.cpp src/Core/Diagnostics.cpp)
+    target_include_directories(DiagnosticsChecks PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_compile_definitions(DiagnosticsChecks PRIVATE ENABLE_COMMONLIBSSE_TESTING=1)
+    target_link_libraries(DiagnosticsChecks PRIVATE CommonLibSSE::CommonLibSSE version)
+    target_precompile_headers(DiagnosticsChecks PRIVATE include/PCH.h)
+    add_test(NAME DiagnosticsChecks COMMAND DiagnosticsChecks)
+    add_executable(RuntimeLayoutChecks tests/RuntimeLayoutChecks.cpp src/Core/Diagnostics.cpp src/Hooks/RuntimeHooks.cpp src/Hooks/RuntimePatchInspection.cpp)
+    target_include_directories(RuntimeLayoutChecks PRIVATE include extern/minhook/src/hde "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_compile_definitions(RuntimeLayoutChecks PRIVATE ENABLE_COMMONLIBSSE_TESTING=1)
-    target_link_libraries(RuntimeLayoutChecks PRIVATE CommonLibSSE::CommonLibSSE)
+    target_link_libraries(RuntimeLayoutChecks PRIVATE CommonLibSSE::CommonLibSSE version)
     target_precompile_headers(RuntimeLayoutChecks PRIVATE include/PCH.h)
     add_test(NAME RuntimeLayoutChecks COMMAND RuntimeLayoutChecks)
     # Optional before/after diagnosis using a previous release's hook sources.
@@ -230,6 +251,7 @@ if(DDC_BUILD_CHECKS)
     target_include_directories(MenuLayoutChecks PRIVATE include)
     add_test(NAME MenuLayoutChecks COMMAND MenuLayoutChecks)
     add_library(MenuFrameworkLoadFixture SHARED tests/MenuFrameworkLoadFixture.cpp)
+    target_include_directories(MenuFrameworkLoadFixture PRIVATE include)
     set_target_properties(MenuFrameworkLoadFixture PROPERTIES
         OUTPUT_NAME SKSEMenuFramework
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
@@ -241,18 +263,27 @@ if(DDC_BUILD_CHECKS)
     add_executable(SliderValueInputChecks tests/SliderValueInputChecks.cpp)
     target_include_directories(SliderValueInputChecks PRIVATE include)
     add_test(NAME SliderValueInputChecks COMMAND SliderValueInputChecks)
-    add_executable(TargetLockPitchBiasChecks tests/TargetLockPitchBiasChecks.cpp)
-    target_include_directories(TargetLockPitchBiasChecks PRIVATE include)
-    add_test(NAME TargetLockPitchBiasChecks COMMAND TargetLockPitchBiasChecks)
+    add_executable(TargetLockBiasChecks tests/TargetLockBiasChecks.cpp)
+    target_include_directories(TargetLockBiasChecks PRIVATE include)
+    add_test(NAME TargetLockBiasChecks COMMAND TargetLockBiasChecks)
     add_executable(FleeFramingChecks tests/FleeFramingChecks.cpp)
     target_include_directories(FleeFramingChecks PRIVATE include)
     add_test(NAME FleeFramingChecks COMMAND FleeFramingChecks)
+    add_executable(ParaglideDiagnosticsChecks tests/ParaglideDiagnosticsChecks.cpp)
+    target_include_directories(ParaglideDiagnosticsChecks PRIVATE include)
+    add_test(NAME ParaglideDiagnosticsChecks COMMAND ParaglideDiagnosticsChecks)
     add_executable(NpcNoiseChecks tests/NpcNoiseChecks.cpp)
     target_include_directories(NpcNoiseChecks PRIVATE include)
     add_test(NAME NpcNoiseChecks COMMAND NpcNoiseChecks)
+    add_executable(ProjectileFlybyChecks tests/ProjectileFlybyChecks.cpp)
+    target_include_directories(ProjectileFlybyChecks PRIVATE include)
+    add_test(NAME ProjectileFlybyChecks COMMAND ProjectileFlybyChecks)
     add_executable(HitShakeChecks tests/HitShakeChecks.cpp)
     target_include_directories(HitShakeChecks PRIVATE include)
     add_test(NAME HitShakeChecks COMMAND HitShakeChecks)
+    add_executable(DamageReactionChecks tests/DamageReactionChecks.cpp)
+    target_include_directories(DamageReactionChecks PRIVATE include)
+    add_test(NAME DamageReactionChecks COMMAND DamageReactionChecks)
     add_executable(ArcheryHitShakeChecks tests/ArcheryHitShakeChecks.cpp)
     target_include_directories(ArcheryHitShakeChecks PRIVATE include)
     add_test(NAME ArcheryHitShakeChecks COMMAND ArcheryHitShakeChecks)
@@ -262,6 +293,17 @@ if(DDC_BUILD_CHECKS)
     add_executable(NoiseTransitionChecks tests/NoiseTransitionChecks.cpp)
     target_include_directories(NoiseTransitionChecks PRIVATE include)
     add_test(NAME NoiseTransitionChecks COMMAND NoiseTransitionChecks)
+    add_executable(FirstPersonNoiseChecks tests/FirstPersonNoiseChecks.cpp)
+    target_include_directories(FirstPersonNoiseChecks PRIVATE include)
+    add_test(NAME FirstPersonNoiseChecks COMMAND FirstPersonNoiseChecks)
+    add_executable(CinematicViewsChecks tests/CinematicViewsChecks.cpp)
+    target_include_directories(CinematicViewsChecks PRIVATE include)
+    add_test(NAME CinematicViewsChecks COMMAND CinematicViewsChecks)
+    add_executable(CinematicViewRenderChecks tests/CinematicViewRenderChecks.cpp)
+    target_include_directories(CinematicViewRenderChecks PRIVATE include)
+    target_link_libraries(CinematicViewRenderChecks PRIVATE CommonLibSSE::CommonLibSSE)
+    target_precompile_headers(CinematicViewRenderChecks PRIVATE include/PCH.h)
+    add_test(NAME CinematicViewRenderChecks COMMAND CinematicViewRenderChecks)
     add_executable(POVSlideRecoveryChecks tests/POVSlideRecoveryChecks.cpp)
     target_include_directories(POVSlideRecoveryChecks PRIVATE include)
     add_test(NAME POVSlideRecoveryChecks COMMAND POVSlideRecoveryChecks)

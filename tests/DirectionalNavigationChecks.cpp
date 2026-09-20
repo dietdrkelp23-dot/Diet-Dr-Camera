@@ -114,6 +114,91 @@ static void CheckWindowsAndLayers()
     Expect(nav, parentChild, 12, 0, -1, 11, "Could not reenter the child from below");
 }
 
+static void CheckListFooterColumns()
+{
+    // Remove is in the parent page, below a sparse bound list. The neighboring
+    // library and editor have controls much closer to the button vertically.
+    for (float scale : {0.5f, 2.0f / 3.0f, 1.0f, 1.2f}) {
+        for (bool mirrored : {false, true}) {
+            for (bool severalRows : {false, true}) {
+                auto library = Item(1, 28, 750, 384);
+                library.wx0 = 20; library.wx1 = 420;
+                library.wy0 = 100; library.wy1 = 800;
+                auto bound = Item(2, 448, 120, 244);
+                bound.wx0 = 440; bound.wx1 = 700;
+                bound.wy0 = 100; bound.wy1 = 800;
+                auto editor = Item(3, 730, 680, 500);
+                auto remove = Item(4, 440, 820, 260, 30);
+                auto bind = Item(5, 20, 820, 400, 30);
+                auto toolbar = Item(6, 440, 40, 260, 30);
+                for (auto* item : {&editor, &remove, &bind, &toolbar}) {
+                    item->wx1 = 1400; item->wy1 = 900;
+                }
+                auto hidden = bound; hidden.id = 7; hidden.y0 = 805; hidden.y1 = 825;
+                std::vector items{library, bound, editor, remove, bind, toolbar, hidden};
+                if (severalRows) {
+                    auto last = bound; last.id = 8; last.y0 = 150; last.y1 = 170;
+                    items.push_back(last);
+                }
+                for (auto& item : items) {
+                    if (mirrored) {
+                        const float x0 = item.x0, wx0 = item.wx0;
+                        item.x0 = 1400 - item.x1; item.x1 = 1400 - x0;
+                        item.wx0 = 1400 - item.wx1; item.wx1 = 1400 - wx0;
+                    }
+                    item.x0 = item.x0 * scale + 73; item.x1 = item.x1 * scale + 73;
+                    item.wx0 = item.wx0 * scale + 73; item.wx1 = item.wx1 * scale + 73;
+                    item.y0 = item.y0 * scale + 31; item.y1 = item.y1 * scale + 31;
+                    item.wy0 = item.wy0 * scale + 31; item.wy1 = item.wy1 * scale + 31;
+                }
+                std::reverse(items.begin(), items.end());
+                DirectionalNavigation nav;
+                const auto last = severalRows ? 8u : 2u;
+                Expect(nav, items, 4, 0, -1, last, "Up from Remove left the bound list's column");
+                Expect(nav, items, last, 0, 1, 7, "Down left the list before reaching its offscreen row");
+                std::erase_if(items, [](const auto& item) { return item.id == 7; });
+                nav.Reset();
+                Expect(nav, items, last, 0, 1, 4, "Down from the bound list missed Remove");
+                Expect(nav, items, 4, mirrored ? 1 : -1, 0, 5, "Horizontal footer navigation stopped working");
+                Expect(nav, items, 5, 0, -1, 1, "Up from Bind missed the library");
+                Expect(nav, items, 6, 0, 1, 2, "Down from the toolbar missed its list's first visible row");
+                // A real control between the button and the list still comes first.
+                auto intervening = items[Index(items, 4)];
+                intervening.id = 9;
+                intervening.y0 = 800 * scale + 31; intervening.y1 = 815 * scale + 31;
+                items.push_back(intervening);
+                nav.Reset();
+                Expect(nav, items, 4, 0, -1, 9, "Entering a list skipped a closer control in the same column");
+            }
+        }
+    }
+}
+
+static void CheckPaneCrossingAndRelayout()
+{
+    auto libraryTop = Item(1, 20, 100, 180);
+    auto libraryBottom = Item(2, 20, 500, 180);
+    auto bound = Item(3, 280, 100, 180);
+    for (auto* item : {&libraryTop, &libraryBottom}) item->wx1 = 240;
+    bound.wx0 = 260; bound.wx1 = 500;
+    auto hidden = bound; hidden.id = 4; hidden.y0 = 610; hidden.y1 = 630;
+    std::array items{libraryTop, libraryBottom, bound, hidden};
+    DirectionalNavigation nav;
+    Expect(nav, items, 2, 1, 0, 3, "Right could not enter a sparse neighboring pane");
+    Expect(nav, items, 3, -1, 0, 2, "Left lost the original row when returning from a sparse pane");
+    Expect(nav, items, 2, 1, 0, 3, "Repeated pane crossing changed the route");
+    // Reposition and scale the whole menu while the cursor is in the sparse pane.
+    for (auto& item : items) {
+        item.x0 = item.x0 * 0.75f + 95; item.x1 = item.x1 * 0.75f + 95;
+        item.wx0 = item.wx0 * 0.75f + 95; item.wx1 = item.wx1 * 0.75f + 95;
+        item.y0 = item.y0 * 0.75f + 300; item.y1 = item.y1 * 0.75f + 300;
+        item.wy0 = item.wy0 * 0.75f + 300; item.wy1 = item.wy1 * 0.75f + 300;
+    }
+    Expect(nav, items, 3, -1, 0, 2, "Menu relayout lost the remembered row");
+    Expect(nav, items, 3, 0, -1, 0, "Up escaped a sparse pane into its neighbor");
+    Expect(nav, items, 2, 0, -1, 0, "Navigation moved a cursor from an inactive modal layer", 2);
+}
+
 static void CheckInlineResetButtons()
 {
     // Main-menu sliders span the editor while their small Reset buttons sit
@@ -207,10 +292,12 @@ int main()
         CheckOffsetControls();
         CheckRememberedColumn();
         CheckWindowsAndLayers();
+        CheckListFooterColumns();
+        CheckPaneCrossingAndRelayout();
         CheckInlineResetButtons();
         CheckVariedGrids();
         CheckClippedList();
-        std::cout << "Directional navigation checks passed (offsets, lanes, panes, layers, inline resets, 400 grids, 2,000-row list).\n";
+        std::cout << "Directional navigation checks passed (offsets, lanes, panes, list footers, layers, inline resets, 400 grids, 2,000-row list).\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

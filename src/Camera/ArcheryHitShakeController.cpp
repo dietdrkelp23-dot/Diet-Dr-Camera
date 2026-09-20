@@ -1,5 +1,7 @@
 #include "PCH.h"
 #include "Camera/ArcheryHitShakeController.h"
+#include "Camera/CameraNoiseController.h"
+#include "Camera/DamageReactionController.h"
 #include "Camera/StateResolver.h"
 #include "Core/ArcheryHitShake.h"
 #include "Settings/EquippedItemBinding.h"
@@ -44,6 +46,9 @@ namespace DietDrCamera::ArcheryHitShakeController
 
         void UpdateProjectile(RE::Projectile* projectile, float dt)
         {
+            // Observe independently of player aim correction, tracing settings
+            // and the optional SmoothCam deferral in ArrowPathDetour.
+            if (projectile) CameraNoiseController::NotifyNpcArcheryFlight(projectile, projectile->GetPosition());
             if (PlayerArrow(projectile)) ObserveProjectile(projectile, Now());
             originalUpdate(projectile, dt);
         }
@@ -51,6 +56,8 @@ namespace DietDrCamera::ArcheryHitShakeController
         void AddImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
                        const RE::NiPoint3& velocity, RE::hkpCollidable* collidable, std::int32_t arg6, std::uint32_t arg7)
         {
+            CameraNoiseController::NotifyNpcArcheryFlight(projectile, position, true, target && target->IsPlayerRef());
+            DamageReactionController::ObserveProjectile(projectile, target);
             // Copy before calling the next handler: it can change or destroy
             // the projectile. No collision outcome or trajectory is modified.
             const bool eligible = PlayerArrow(projectile) && target &&
@@ -115,7 +122,7 @@ namespace DietDrCamera::ArcheryHitShakeController
         REL::Relocation<std::uintptr_t> table{RE::VTABLE_ArrowProjectile[0]};
         originalUpdate = reinterpret_cast<UpdateFn>(table.write_vfunc(0xAB, &UpdateProjectile));
         originalImpact = reinterpret_cast<ImpactFn>(table.write_vfunc(0xBD, &AddImpact));
-        spdlog::debug("[HITSHAKE-ARCHERY] native arrow/bolt launch and contact observers installed");
+        spdlog::info("[HITSHAKE-ARCHERY] native arrow/bolt launch, flyby and contact observers installed");
     }
 
     void Reset() { bridge.SetView(-1); }

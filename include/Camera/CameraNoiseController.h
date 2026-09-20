@@ -2,6 +2,7 @@
 
 #include "vendor/PerlinNoise.hpp"
 #include "Core/NoiseTransition.h"
+#include "Core/FirstPersonNoise.h"
 
 namespace DietDrCamera
 {
@@ -27,9 +28,12 @@ namespace DietDrCamera
         // share previous-form memory so a race change is consumed once.
         static void NotifyNpcTransformBeat(bool a_vampireLord, const RE::NiPoint3& a_pos, bool a_revert = false);
         static void NotifyNpcRaceChange(RE::Actor* a_actor);
-        // Called by the existing arrow update hook. Queues values only.
-        static void NotifyNpcArcheryShot(RE::ObjectRefHandle a_shooter, bool a_crossbow, RE::FormID a_weapon,
-                                         RE::FormID a_projectile, const RE::NiPoint3& a_pos);
+        // Existing arrow update/contact hooks supply actual flight positions.
+        static void NotifyNpcArcheryFlight(RE::Projectile* a_projectile, const RE::NiPoint3& a_pos,
+                                          bool a_terminal = false, bool a_hitPlayer = false);
+        static void NotifyNpcMagicFlight(RE::Projectile* a_projectile, const RE::NiPoint3& a_pos,
+                                        bool a_terminal = false, bool a_hitPlayer = false);
+        static void NotifyNpcMagicShot(RE::ObjectRefHandle a_shooter, RE::FormID a_spell, RE::FormID a_projectile);
 
         // This frame's TOTAL rotation + translation the 3p noise stack
         // applied to cameraRoot (ambient layers, beats, head bob, Repulse
@@ -308,14 +312,9 @@ namespace DietDrCamera
         // First-person history uses the same interruption handling as 3p.
         // Outgoing textures retain their parameters, clocks and unfinished fade
         // progress. The current layer is still the live spring-eased state.
-        struct FirstPersonNoiseLayer
-        {
-            double clock = 0.0;
-            float amp = 0.0f, speed = 0.0f, rot = 0.0f;
-            float driftJitter = 0.35f, roughness = 0.45f;
-        };
         FirstPersonNoiseLayer fp1pCurrent; // Last actually sampled live layer.
         NoiseTransitionHistory<FirstPersonNoiseLayer> fp1pOutgoing;
+        FirstPersonNoiseSources fp1pSources;
         // Outgoing RMS amplitude for the apply gate and diagnostics.
         float  fp1pPrevAmp   = 0.0f;
         float  fp1pXfade     = 1.0f;   // 1 = all current

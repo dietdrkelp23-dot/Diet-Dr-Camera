@@ -5,7 +5,8 @@
 #include "Camera/AnimationCameraController.h"
 #include "Camera/CameraController.h"
 #include "Camera/StateResolver.h"
-#include "Camera/TargetLockPitchBias.h"
+#include "Camera/TargetLockBias.h"
+#include "Camera/CombatFramingController.h"
 #include "Core/Spring.h"
 #include "Dialogue/DialogueLookPicker.h"
 #include "Hooks/HookManager.h"
@@ -443,7 +444,8 @@ namespace DietDrCamera
 
     void CameraController::ResetTransitionState()
     {
-        currentLockPitchBias = velLockPitchBias = 0.0f;
+        CombatFramingController::Reset();
+        lockProximityBias = {};
         m_vanityTransition.Reset();
         InvalidateProfileReferences();
         lastSelectedProfile = nullptr;
@@ -457,7 +459,7 @@ namespace DietDrCamera
 
     void CameraController::ResetZoomBaseline()
     {
-        currentLockPitchBias = velLockPitchBias = 0.0f;
+        lockProximityBias = {};
         m_vanityTransition.Reset();
         // Snap every profile channel back to Skyrim-vanilla values AND
         // restore the engine zoom fields to the PRE-PLUGIN value captured
@@ -669,8 +671,8 @@ namespace DietDrCamera
 
         if (!coveringTransition &&
             currentState != thirdPerson && currentState != mounted && currentState != dragon) {
-            currentLockPitchBias = 0.0f;
-            velLockPitchBias = 0.0f;
+            CombatFramingController::Reset();
+            lockProximityBias = {};
             m_vanityTransition.Reset();
             if (originalFOV >= 0.0f) {
                 a_camera->worldFOV = originalFOV;
@@ -2352,7 +2354,7 @@ namespace DietDrCamera
             const bool tlTuned =
                 t.sideOffset != d.sideOffset || t.height != d.height ||
                 t.zoom != d.zoom || t.fov != d.fov ||
-                t.rotation != d.rotation || t.pitchOffset != d.pitchOffset || t.transitionSetPitchBias;
+                t.rotation != d.rotation || t.pitchOffset != d.pitchOffset || t.ProximityBiasAnySet();
             selected = (resolver.IsTargetLocked() && tlTuned)
                            ? &settings.paraglideTLProfile
                            : &settings.paraglideProfile;
@@ -3809,7 +3811,7 @@ namespace DietDrCamera
             // block runs every frame in both lock states, so the release can't
             // leak when the lock drops.
             float desiredLockAimYaw = 0.0f;
-            float desiredLockPitchBias = 0.0f;
+            TargetLockBias::Offsets desiredLockBias{};
             if (resolver.IsTargetLocked()) {
                 auto& tdm = TDMIntegration::GetSingleton();
                 if (auto h = tdm.GetCurrentTarget()) {
@@ -3819,8 +3821,8 @@ namespace DietDrCamera
                         const float dx   = tpos.x - pp.x;
                         const float dy   = tpos.y - pp.y;
                         const float d    = std::sqrt(dx * dx + dy * dy);
-                        if (targetProfile.transitionSetPitchBias && !dialogueActiveForProfile)
-                            desiredLockPitchBias = TargetLockPitchBias::Radians(d, targetProfile.transitionPitchBias);
+                        if (!dialogueActiveForProfile)
+                            desiredLockBias = TargetLockBias::Resolve(d, targetProfile);
                         // AIM BIAS: global, unless the composed profile carries
                         // an override (2026-09-07). targetProfile starts as a
                         // copy of the resolved ENTRY and has already had the
@@ -3903,11 +3905,7 @@ namespace DietDrCamera
                 }
             }
             springStep(currentLockAimYaw, velLockAimYaw, desiredLockAimYaw, lockAimOmega);
-            springStep(currentLockPitchBias, velLockPitchBias, desiredLockPitchBias, lockAimOmega);
-            if (!std::isfinite(currentLockPitchBias) || !std::isfinite(velLockPitchBias)) {
-                currentLockPitchBias = 0.0f;
-                velLockPitchBias = 0.0f;
-            }
+            lockProximityBias.Step(desiredLockBias, lockAimOmega, dt);
             // Defense-in-depth: this spring's output is written into the engine
             // camera yaw every frame, so a single non-finite value would latch
             // and corrupt the view permanently. If anything ever drives it
@@ -3950,11 +3948,14 @@ namespace DietDrCamera
             velLockSideScale   = 0.0f;
         }
         effectiveSide *= easedLockSideScale;
-        float effectiveHeight = currentProfile.height;
-        float effectiveZoom   = currentProfile.zoom;
-        float effectiveFOV    = currentProfile.fov;
+        const auto crowd = CombatFramingController::Update(dt,
+            !menuBlocking && !resolver.IsBowZoomed() && !VanityCamera::IsActive() &&
+            (currentState == thirdPerson || currentState == mounted));
+        float effectiveHeight = currentProfile.height + lockProximityBias.value.height;
+        float effectiveZoom   = currentProfile.zoom + lockProximityBias.value.zoom + crowd.zoom;
+        float effectiveFOV    = currentProfile.fov + lockProximityBias.value.fov + crowd.fov;
         float effectiveRot    = currentProfile.rotation;
-        float effectivePitch  = currentProfile.pitchOffset + currentLockPitchBias * 100.0f;
+        float effectivePitch  = currentProfile.pitchOffset + lockProximityBias.value.pitch * 100.0f;
 
 
         // Store effective rotation for HookManager to read next frame
@@ -4708,7 +4709,7 @@ namespace DietDrCamera
             // distance return on its own.
             currentProfile.zoom = targetProfile.zoom;
             velZoom             = 0.0f;
-            effectiveZoom       = currentProfile.zoom;
+            effectiveZoom       = currentProfile.zoom + lockProximityBias.value.zoom + crowd.zoom;
 
             if (m_diagDlgEdge.pending && !m_diagDlgEdge.isEntry) {
                 spdlog::debug(
@@ -5097,9 +5098,9 @@ namespace DietDrCamera
             // dlgY*sp component (~-8 units at typical pitch) uncovered
             // â†’ camera snaps that distance upward in world frame.
             tps->posOffsetExpected.z =
-                std::lerp(m_dlgChanBlend.startExpectedZ, m_dlgChanBlend.targetZ, s);
+                std::lerp(m_dlgChanBlend.startExpectedZ, m_dlgChanBlend.targetZ + lockProximityBias.value.height, s);
             tps->posOffsetActual.z =
-                std::lerp(m_dlgChanBlend.startActualZ,   m_dlgChanBlend.targetZ, s);
+                std::lerp(m_dlgChanBlend.startActualZ,   m_dlgChanBlend.targetZ + lockProximityBias.value.height, s);
         }
         dialogueExitDecayTime = 0.0f;
         dialogueLastY         = 0.0f;

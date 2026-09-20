@@ -79,12 +79,17 @@ namespace
         std::uint32_t projectileFormID{};
         float integrationStep = 1.0f/60.0f;
         std::uint32_t collisionFilter = static_cast<std::uint32_t>(RE::COL_LAYER::kProjectile);
+        RE::ObjectRefHandle projectile;
+        float launchAge = 0;
     };
     std::array<FireSlot, kFireRingSize> sFireRing;
     std::mutex                          sFireMutex;
     std::unordered_map<std::uint32_t, float> sSpeedMultipliers;
     std::unordered_map<std::uint32_t, std::uint32_t> sCollisionLayers;
     std::uint32_t                       sFireSeq = 0;
+    std::array<DietDrCamera::MissileProjectileDetour::ImpactEvent, 64> sImpacts{};
+    std::size_t sNextImpact = 0;
+    std::mutex sImpactMutex;
 
     using UpdateImplFn = void(*)(RE::Projectile*, float);
     UpdateImplFn _originalUpdateImpl = nullptr;
@@ -167,7 +172,8 @@ namespace
         // we want zero behavior change (projectiles fly with vanilla
         // body-aim direction). The check is cheap; do it before any
         // field access on the projectile.
-        if (!DietDrCamera::SettingsManager::GetSingleton().spellTracingEnabled) {
+        if (!DietDrCamera::SettingsManager::GetSingleton().GetProjectileTracing(
+                RE::PlayerCamera::GetSingleton() && RE::PlayerCamera::GetSingleton()->IsInFirstPerson()).spellEnabled) {
             _originalUpdateImpl(a_proj, a_delta);
             return;
         }
@@ -482,6 +488,8 @@ namespace
                     // the integrator ran, retain the gravity it just applied
                     // to the next frame's velocity. In 1p (publish-only)
                     // the engine's own launch is left completely untouched.
+                    const auto projectileHandle = a_proj->GetHandle();
+                    const float launchAge = runtime.livingTime;
                     _originalUpdateImpl(a_proj, a_delta);
                     if (steerAim && (runtime.flags.underlying() & 0x80000000u) == 0) {
                         runtime.velocity.x       = fireDir.x * velScalar;
@@ -529,6 +537,8 @@ namespace
                         slot.projectileFormID = projForm->GetFormID();
                         slot.integrationStep = DietDrCamera::SpellTrajectory::IntegrationStep(a_delta);
                         slot.collisionFilter = collisionFilter;
+                        slot.projectile = projectileHandle;
+                        slot.launchAge = launchAge;
                         if (sSpeedMultipliers.size() >= 256) sSpeedMultipliers.clear();
                         sSpeedMultipliers[projForm->GetFormID()] = runtime.speedMult;
                         if (sCollisionLayers.size() >= 256) sCollisionLayers.clear();
@@ -599,9 +609,38 @@ namespace DietDrCamera
                 slot.startWorld, slot.targetWorld, slot.fireCamFwd,
                 slot.fireSec, slot.projSpeed, slot.castingSource,
                 slot.launchVelocity, slot.acceleration, slot.range, slot.projectileFormID, slot.integrationStep,
-                slot.collisionFilter });
+                slot.collisionFilter, slot.projectile, slot.launchAge });
         }
         inOutLastSeen = sFireSeq;
+    }
+
+    void MissileProjectileDetour::ObserveImpact(RE::Projectile* projectile, const RE::NiPoint3& position)
+    {
+        if (!projectile || !SpellTrajectory::Finite(position)) return;
+        auto* camera = RE::PlayerCamera::GetSingleton();
+        if (!SettingsManager::GetSingleton().GetProjectileTracing(camera && camera->IsInFirstPerson()).spellEnabled) return;
+        const auto& data = projectile->GetProjectileRuntimeData();
+        const auto shooter = data.shooter.get();
+        if (!shooter || !shooter->IsPlayerRef() || !data.spell || data.ammoSource || !std::isfinite(data.livingTime)) return;
+        ImpactEvent event{projectile->GetHandle(), position, data.livingTime,
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count()};
+        std::scoped_lock lock(sImpactMutex);
+        sImpacts[sNextImpact++ % sImpacts.size()] = event;
+        static unsigned logged = 0;
+        if (logged++ < 16) spdlog::info("[SpellTrace] confirmed impact ref={:08X} age={:.3f} position=({:.2f},{:.2f},{:.2f})",
+            projectile->GetFormID(), data.livingTime, position.x, position.y, position.z);
+    }
+
+    bool MissileProjectileDetour::FindImpact(RE::ObjectRefHandle projectile, double firedAt, ImpactEvent& out)
+    {
+        if (!projectile) return false;
+        std::scoped_lock lock(sImpactMutex);
+        const ImpactEvent* first = nullptr;
+        for (const auto& event : sImpacts)
+            if (event.projectile == projectile && event.time >= firedAt - .25 && (!first || event.time < first->time)) first = &event;
+        if (!first) return false;
+        out = *first;
+        return true;
     }
 
     void MissileProjectileDetour::PublishReleaseCapture(const RE::NiPoint3& forward,
@@ -850,7 +889,8 @@ namespace DietDrCamera
         if (!_originalConeUpdateImpl) return;
         if (!a_proj) { _originalConeUpdateImpl(a_proj, a_delta); return; }
 
-        if (!DietDrCamera::SettingsManager::GetSingleton().spellTracingEnabled) {
+        if (!DietDrCamera::SettingsManager::GetSingleton().GetProjectileTracing(
+                RE::PlayerCamera::GetSingleton() && RE::PlayerCamera::GetSingleton()->IsInFirstPerson()).spellEnabled) {
             _originalConeUpdateImpl(a_proj, a_delta);
             return;
         }

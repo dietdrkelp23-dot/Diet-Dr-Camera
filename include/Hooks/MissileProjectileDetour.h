@@ -75,7 +75,19 @@ namespace DietDrCamera
             std::uint32_t projectileFormID{};
             float integrationStep = 1.0f/60.0f;
             std::uint32_t collisionFilter = static_cast<std::uint32_t>(RE::COL_LAYER::kProjectile);
+            RE::ObjectRefHandle projectile;
+            float launchAge = 0;
         };
+
+        struct ImpactEvent {
+            RE::ObjectRefHandle projectile;
+            RE::NiPoint3 position{};
+            float age = 0;
+            double time = 0;
+        };
+        // The existing native contact observer supplies real collision points.
+        static void ObserveImpact(RE::Projectile* projectile, const RE::NiPoint3& position);
+        static bool FindImpact(RE::ObjectRefHandle projectile, double firedAt, ImpactEvent& out);
 
         // Drain all fire events with sequence > inOutLastSeen. Updates
         // inOutLastSeen to the latest sequence on return. Sequence-

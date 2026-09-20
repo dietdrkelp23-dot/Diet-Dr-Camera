@@ -31,11 +31,7 @@ namespace SKSEMenuFramework {
             inline std::string key;
         }
 
-        class WindowInterface {
-        public:
-            std::atomic<bool> IsOpen{false};
-            std::atomic<bool> BlockUserInput{true};
-        };
+        using WindowInterface = DietDrCamera::MenuFrameworkBinding::WindowInterface;
         typedef void(__stdcall* RenderFunction)();
         typedef bool(__stdcall* InputEventCallback)(RE::InputEvent*);
         typedef void(__stdcall* HudElementCallback)();

@@ -58,16 +58,18 @@ namespace DdcRelease {
             int ordinals = Rva(b, pe, U(b, exp + 36));
             int functions = Rva(b, pe, U(b, exp + 28));
             int declaration = -1;
-            bool load = false, version = false;
+            bool load = false, version = false, query = false;
             for (uint i = 0; i < U(b, exp + 24); ++i) {
                 string name = Z(b, Rva(b, pe, U(b, names + checked((int)i) * 4)));
                 load |= name == "SKSEPlugin_Load"; version |= name == "SKSEPlugin_Version";
+                query |= name == "SKSEPlugin_Query";
                 if (name == "SKSEPlugin_Version") {
                     int ordinal = BitConverter.ToUInt16(b, ordinals + checked((int)i) * 2);
                     declaration = Rva(b, pe, U(b, functions + ordinal * 4));
                 }
             }
-            if (!load || !version) throw new Exception("Required SKSE exports are missing");
+            if (!load || !version || !query)
+                throw new Exception("Required SKSE exports are missing (Load, Version and SE Query are all required)");
             var expected = new Version(expectedVersion);
             uint packedVersion = ((uint)expected.Major << 24) | ((uint)expected.Minor << 16) | ((uint)expected.Build << 4);
             if (U(b, declaration) != 1 || U(b, declaration + 4) != packedVersion)

@@ -1,4 +1,26 @@
-# Runtime compatibility - 1.1.1
+# Runtime compatibility - 1.2.0
+
+Version 1.2.0 includes automatic startup diagnostics to investigate remaining
+runtime/mod conflicts. Send the full DDC and SKSE logs plus the complete error
+message; see [SUPPORT-LOGGING.md](SUPPORT-LOGGING.md). Additional logging does
+not establish that the original reported failure or every game version is fixed.
+
+## Current audit and earlier startup evidence (September 19, 2026)
+
+See [RUNTIME-COMPATIBILITY-AUDIT.md](RUNTIME-COMPATIBILITY-AUDIT.md) for the
+current source audit, primary references, reproduced 1.7.99/1.7.104 callback rejections,
+UI-driver conflict diagnostics, address coverage and executable-image checks.
+All 21 loader-listed Steam executables now pass ten offline scenarios each and
+47 hooked vtable target checks. The earlier logging build passed isolated
+main-menu startup on 1.5.97 and 1.7.104; this is not a launch of the final 1.2.0
+DLL. The two GOG executable fixtures are missing, and
+gameplay acceptance remains incomplete; see [the full matrix](RUNTIME-MATRIX.md).
+The exact cause of the quoted RuntimeHooks.cpp(24) report is not established.
+The list below is a set of loader targets,
+not a claim that every version has been gameplay-tested. This audit
+does not replace the historical release evidence below.
+
+## Published 1.1.1 evidence
 
 Version 1.1.1 changes only whole-tab clipboard matching and release metadata.
 Runtime hooks and menu loading are unchanged from 1.1.0. The live evidence below

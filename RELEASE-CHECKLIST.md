@@ -1,4 +1,39 @@
-# Release verification - 1.1.1
+# Release verification - 1.2.0
+
+The 1.2.0 Release build and all 41 standalone checks pass, including automatic
+startup logging, abrupt-exit log persistence, previous-session retention,
+runtime-hook validation, preset migration, damage reactions and projectile
+flybys. The paraglider timing experiments are reverted; Crowd Modifier's glide
+exclusion and buffered diagnostics remain. Cinematic Views and the experimental
+Apply button are absent from the active build/menu.
+
+All 21 available Steam executable fixtures pass 210 offline hook scenarios and
+47 vtable target checks each. GOG 1.6.659 and 1.6.1179 executable fixtures are
+missing. These checks do not launch Skyrim or test gameplay.
+
+The release packager snapshots the working source, builds and tests it, verifies
+the DLL/PDB identity and version, checks every archive member/hash, and preserves
+the matching symbols privately. The player ZIP contains only the DLL and required
+stagger-camera animation; the separate source ZIP includes the startup support
+guide, runtime matrix, dependencies, licenses and build instructions.
+
+Release evidence is retained under `build/diagnostics/release-1.2.0-20260919/`
+and the timestamped `release/candidate-1.2.0-*/` directory. The candidate manifest
+identifies the exact files. An extracted-source build is checked separately
+before handing over the archives; its results belong with those release records.
+
+Startup was previously checked on 1.5.97 and 1.7.104 with the logging build
+identified in RUNTIME-TESTING.md. These are earlier DLLs, not a fresh launch of
+1.2.0. The author has tested the recent effects in the normal 1.6.1170 list.
+Gameplay acceptance across all targets remains incomplete. The final packaged
+1.2.0 DLL has not been launched in game during release preparation. See
+RUNTIME-MATRIX.md and SUPPORT-LOGGING.md for coverage and reporting instructions.
+
+This is local release preparation; no Nexus upload or source tag is published
+by the packaging process. The historical evidence below applies to its named
+versions and must not be read as additional 1.2.0 testing.
+
+## Previous release verification - 1.1.1
 
 This patch corrects whole-tab matching between the Sheathed and Unsheathed base
 rows after the author reported the omission. Automated clipboard checks cover

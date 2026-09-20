@@ -32,6 +32,7 @@ namespace DietDrCamera::RuntimePatchInspection
         std::size_t branchOffset;
         std::size_t branchLength;
         std::uintptr_t executeConsole;
+        bool alreadyDisabled;
     };
 
     std::optional<UIJob> InspectUIJob(std::span<const std::uint8_t> code, std::uintptr_t address,

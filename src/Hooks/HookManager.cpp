@@ -30,6 +30,7 @@
 #include "Input/POVSlideRecovery.h"
 #include "Hooks/HookManager.h"
 #include "Hooks/TweenCameraTrace.h"
+#include "Hooks/ParaglideTrace.h"
 #include "Hooks/MissileProjectileDetour.h"
 #include "LockOn/EnemyDetector.h"
 #include "LockOn/TDMIntegration.h"
@@ -1148,6 +1149,15 @@ namespace DietDrCamera
         _originalTogglePOVUpdateHeldState  = povVtbl.write_vfunc(RuntimeHooks::InputSlot(0x5), &HookedTogglePOVUpdateHeldState);
         spdlog::info("HookManager: TogglePOVHandler::ProcessButton hooked");
         spdlog::info("HookManager: TogglePOVHandler::UpdateHeldStateActive hooked");
+
+        // Vanilla also receives POV input on each camera state's secondary
+        // vtable. Its release handler resets freeRotation, independently of
+        // TogglePOVHandler and TDM's separate failed-target reset preference.
+        REL::Relocation<std::uintptr_t> orbitInputVtbl{ RE::VTABLE_ThirdPersonState[1] };
+        REL::Relocation<std::uintptr_t> horseInputVtbl{ RE::VTABLE_HorseCameraState[1] };
+        _originalOrbitProcessButton = orbitInputVtbl.write_vfunc(RuntimeHooks::InputSlot(0x4), &HookedOrbitProcessButton);
+        _originalHorseOrbitProcessButton = horseInputVtbl.write_vfunc(RuntimeHooks::InputSlot(0x4), &HookedOrbitProcessButton);
+        spdlog::info("HookManager: native R3 orbit reset disabled for third-person and mounted camera input");
 
         // HorseCameraState inherits from ThirdPersonState but has its OWN vtable.
         //
@@ -6178,6 +6188,30 @@ namespace DietDrCamera
         }
     }
 
+    void HookManager::HookedOrbitProcessButton(RE::PlayerInputHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
+    {
+        // static_cast performs the secondary-base adjustment; treating the
+        // incoming pointer as a ThirdPersonState* would read the wrong fields.
+        auto* state = static_cast<RE::ThirdPersonState*>(a_this);
+        const bool keepOrbit = a_event && a_event->GetDevice() == RE::INPUT_DEVICE::kGamepad &&
+            a_event->GetIDCode() == RE::BSWin32GamepadDevice::Keys::kRightThumb &&
+            a_event->QUserEvent() == "Toggle POV" && a_event->IsUp();
+        const auto orbit = state->freeRotation;
+        const auto& original = state->id == RE::CameraState::kMount
+            ? _originalHorseOrbitProcessButton : _originalOrbitProcessButton;
+        original(a_this, a_event, a_data);
+        if (keepOrbit) {
+            const auto reset = state->freeRotation;
+            state->freeRotation = orbit;
+            static unsigned logs = 0;
+            if ((reset.x != orbit.x || reset.y != orbit.y) && logs < 12) {
+                ++logs;
+                spdlog::info("[R3-RECENTER] prevented native orbit reset state={} yaw={:.3f}->{:.3f} pitch={:.3f}->{:.3f}",
+                    static_cast<int>(state->id), orbit.x, reset.x, orbit.y, reset.y);
+            }
+        }
+    }
+
     void HookManager::HookedTogglePOVProcessButton(RE::TogglePOVHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
     {
         // Transformed forms have no real 1p rig â€” entering 1p shows a
@@ -9821,6 +9855,8 @@ namespace DietDrCamera
                 // engagement and release go through the spring; do not impose
                 // a second distance constraint that can move the camera instantly.
                 const RE::NiPoint3 rendered = FleeFraming::ApplyTighten(engineCam, looseCamera, sFlee.tighten);
+                ParaglideTrace::Follow(engineCam, rendered, smoothedLooseness,
+                    (sLaggedPlayer - playerPos).Length(), dbgRate, sFlee.tighten, followReinitialized);
 
                 // Same lockstep write set as before (SmoothCam camera.cpp:217-222):
                 // renderer, audio listener, occlusion and the engine's next-frame

@@ -1,12 +1,16 @@
 #include "PCH.h"
 #include "Settings/SettingsManager.h"
 #include "Camera/HitShakeController.h"
+#include "Camera/DamageReactionController.h"
+#include "UI/CrosshairManager.h"
 
 namespace DietDrCamera
 {
     void SettingsManager::ApplyEngineSettings()
     {
         HitShakeController::Reset();
+        DamageReactionController::Reset();
+        CrosshairManager::GetSingleton().ResetTracing();
         // Push engine-global settings eagerly so they're in place before
         // any event can read them â€” notably fPlayerDeathReloadTime, which
         // the engine reads at BleedoutCameraState::Begin (once per death,

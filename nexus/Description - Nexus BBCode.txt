@@ -13,16 +13,21 @@ Configure the camera in game through SKSE Menu Framework and Quick Tune.
 [*]Player Hit Shake for melee, arrows, bolts and spell/staff missile impacts, with Strength, Speed, Bounce and Texture controls.
 [*]Dialogue, menu, death and ragdoll cameras.
 [*]Replacement Vanity Camera that stays active while you look around.
-[*]Flee Framing that holds fast approaches through turns and eases back as momentum settles. New movement shouts start fresh.
+[*]Flee Framing keeps the player in frame when running towards the camera.
 [*]Horseback Drawing/Zoomed profiles and stabilized mounted target tracking.
 [*]Ritual staff entries for mod-added spells across all five schools, including sneaking and target lock.
 [*]Separate indoor/outdoor collision options for ground, doors, trees and walls.
 [*]Preset saving, sharing, whole-tab copy/paste and controller navigation. Sheathed and Unsheathed base rows copy in either direction.
 [*]Click slider values to type exact numbers, with immediate yellow selection.
-[*]Per-entry Target Lock Pitch Bias adjusts upward/downward pitch as enemies approach.
+[*]Per-entry Target Lock Height, Zoom, FOV and Pitch Bias adjust framing as enemies approach.
+[*]Damage Reaction for incoming weapon, creature and magic hits, with separate intensity for each view.
+[*]Proximity-based arrow, bolt and magic flyby noise. Magic has a wider radius and stronger motion.
+[*]Crowd Modifier adjusts third-person zoom and FOV around engaged enemies; disabled while paragliding.
+[*]Independent First Person and Third Person Projectile Tracing settings.
+[*]Automatic startup diagnostics and three retained previous logs for compatibility reports.
 [/list]
 
-[b]DIET DR CAMERA 1.1.1 - REQUIREMENTS[/b]
+[b]DIET DR CAMERA 1.2.0 - REQUIREMENTS[/b]
 
 Windows x64, Skyrim Special Edition / Anniversary Edition.
 One DLL targets the known SE/AE executable versions listed in RUNTIME-SUPPORT.md,
@@ -67,7 +72,7 @@ Without it, animation profiles use raw animation paths.
 
 [b]INSTALLATION[/b]
 
-Install Diet Dr Camera-1.1.1.zip with MO2 or Vortex, enable it, and launch via SKSE.
+Install Diet Dr Camera-1.2.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
 Open SKSE Menu Framework with its configured shortcut (upstream default F1),
 then select Diet Dr Camera. Save your tuning to a named preset in the Presets panel.
 The main archive contains only the DLL and the empty stagger-camera animation
@@ -98,6 +103,18 @@ Hit Shake starts at zero Strength. It uses native hit events and does not requir
 Precision. Projectile Hit Shake applies to direct actor hits and becomes softer
 with distance; scenery hits, beams and lingering damage do not trigger it.
 
+[b]Startup errors and logs[/b]
+Version 1.2.0 records Skyrim/SKSE versions, Address Library details, loaded DLLs
+and the exact failed hook check automatically. If startup fails, attach the
+complete DietDrCamera.log and skse64.log from the same launch, the full error
+message and a Crash Logger report if one was generated. Verbose Logging is not
+required. Find logs in Documents/My Games/Skyrim Special Edition/SKSE, or
+Skyrim Special Edition GOG/SKSE for GOG. Use your redirected Documents folder
+if applicable. DDC keeps three earlier sessions as DietDrCamera.1.log through
+.3.log. Hook errors include the actual path if fallback logging was needed.
+Logs stay local until you choose to share them. Other-runtime compatibility
+is still being investigated; extra logging does not establish a fix by itself.
+
 [b]Presets and updates[/b]
 Save your tuning to a named preset in the Presets panel. The main download contains
 no personal preset files. Public preset compatibility begins with 1.0; later updates
@@ -105,10 +122,9 @@ must preserve existing tuning and defaults. See PRESET-AUTHORS.md before sharing
 presets on Nexus. Keep a backup of your personal presets when updating.
 
 [b]License and source[/b]
-[url=https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.1]Full versioned source on GitHub[/url]
-[url=https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.1/BUILDING.md]Build instructions[/url]
+The matching source ZIP includes BUILDING.md with complete build instructions.
 GPL-3.0-or-later with modding/linking permissions; see LICENSING.md in the source download.
-The matching [b]Diet Dr Camera - Source-1.1.1.zip[/b] is in this page's Files section.
+The matching [b]Diet Dr Camera - Source-1.2.0.zip[/b] is in this page's Files section.
 It includes source, dependency sources, build recipes and tests. Players only need
 the main download. Third-party components retain their own terms.
 

@@ -1,4 +1,4 @@
-DIET DR CAMERA 1.1.1
+DIET DR CAMERA 1.2.0
 
 A camera overhaul for Skyrim with per-state third-person framing, first-person
 FOV and effects, dialogue/menu cameras, and shareable presets. Configuration
@@ -84,9 +84,11 @@ COMPATIBILITY AND KNOWN ISSUES
 
 SUPPORT
 
-Provide Skyrim and SKSE versions, the mod version, exact reproduction steps,
-DietDrCamera.log from the SKSE logs directory, and a CrashLogger log if present.
-Enable Verbose Logging in DDC only when collecting detailed diagnostic captures.
+Provide the complete DietDrCamera.log and skse64.log from the same launch,
+the full error message, reproduction steps and a Crash Logger report if present.
+Startup diagnostics are automatic; Verbose Logging is not required. DDC retains
+three previous sessions. See SUPPORT-LOGGING.md in the source ZIP for Steam/GOG
+log locations, fallback logging and the information recorded.
 Matching PDB symbols are retained by the developer for crash-report analysis.
 
 CREDITS
@@ -98,5 +100,5 @@ LICENSE AND SOURCE
 
 DDC is GPL-3.0-or-later with modding/linking permissions; see LICENSE.txt,
 LICENSING.md and EXCEPTIONS.md. The matching editable code is the separate
-Diet Dr Camera - Source-1.0.0.zip download on the same mod page. Players only
+Diet Dr Camera - Source-1.2.0.zip download on the same mod page. Players only
 need the main ZIP. Source access and license notices must accompany redistribution.

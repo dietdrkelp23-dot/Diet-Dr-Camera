@@ -1,0 +1,15 @@
+Diet Dr Camera 1.2.0
+
+- Added Damage Reaction for incoming weapon, creature and magic hits, with separate first- and third-person intensity.
+- Added arrow, bolt and magic flyby noise. Closer passes feel stronger; magic has more range and intensity.
+- Added Crowd Modifier to adjust zoom and FOV around nearby enemies. Disabled while paragliding.
+- Added Height, Zoom and FOV Bias to Target Lock.
+- Split Projectile Tracing into first- and third-person settings and improved spell tracking.
+- Improved preset saving, controller hints and Reset button sizing.
+- Fixed unwanted hit reactions and first-person noise conflicts.
+- Improved Skyrim 1.7 startup compatibility.
+- Improved automatic startup logging and kept three previous logs. Verbose Logging is not required.
+
+Existing presets remain compatible. New Damage Reaction and Target Lock bias controls start disabled. Cinematic Views is not included.
+
+Older-version issues are still being investigated. For startup errors, send DietDrCamera.log and skse64.log from the same launch, plus the full error message.

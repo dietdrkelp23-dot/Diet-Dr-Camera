@@ -26,6 +26,12 @@ static CameraProfile TunedProfile(float seed)
     p.transitionZoom = 0.25f;
     p.transitionSetAimBias = true;
     p.transitionAimBias = 0.75f;
+    p.transitionSetHeightBias = true;
+    p.transitionHeightBias = 1.0f;
+    p.transitionSetZoomBias = false;
+    p.transitionZoomBias = -0.75f;
+    p.transitionSetFOVBias = true;
+    p.transitionFOVBias = 0.5f;
     p.transitionSetPitchBias = true;
     p.transitionPitchBias = -0.5f;
     p.SyncTransitionOverride();
@@ -41,6 +47,12 @@ static void RequireProfile(const CameraProfile& actual, const CameraProfile& exp
             actual.transitionZoom == expected.transitionZoom &&
             actual.transitionSetAimBias == expected.transitionSetAimBias &&
             actual.transitionAimBias == expected.transitionAimBias &&
+            actual.transitionSetHeightBias == expected.transitionSetHeightBias &&
+            actual.transitionHeightBias == expected.transitionHeightBias &&
+            actual.transitionSetZoomBias == expected.transitionSetZoomBias &&
+            actual.transitionZoomBias == expected.transitionZoomBias &&
+            actual.transitionSetFOVBias == expected.transitionSetFOVBias &&
+            actual.transitionFOVBias == expected.transitionFOVBias &&
             actual.transitionSetPitchBias == expected.transitionSetPitchBias &&
             actual.transitionPitchBias == expected.transitionPitchBias &&
             actual.transitionOverride == expected.transitionOverride,

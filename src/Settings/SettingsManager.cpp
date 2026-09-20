@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Settings/CinematicViewSettings.h"
 #include "Camera/AnimationCameraController.h"  // RebuildMatchIndex after preset load
 #include "Camera/CameraController.h"  // for ResetZoomBaseline on Reset To Vanilla
 #include "Camera/StateResolver.h"  // for MagicSchool / CastType enum definitions
@@ -232,6 +233,12 @@ namespace DietDrCamera
             profile.transitionSetWeight = tbl["transition_set_weight"].value_or(profile.transitionSetWeight);
             profile.transitionSetAimBias = tbl["transition_set_aim_bias"].value_or(profile.transitionSetAimBias);
             profile.transitionAimBias = tbl["transition_aim_bias"].value_or(profile.transitionAimBias);
+            profile.transitionSetHeightBias = tbl["transition_set_height_bias"].value_or(profile.transitionSetHeightBias);
+            profile.transitionHeightBias = std::clamp(tbl["transition_height_bias"].value_or(profile.transitionHeightBias), -1.5f, 1.5f);
+            profile.transitionSetZoomBias = tbl["transition_set_zoom_bias"].value_or(profile.transitionSetZoomBias);
+            profile.transitionZoomBias = std::clamp(tbl["transition_zoom_bias"].value_or(profile.transitionZoomBias), -1.5f, 1.5f);
+            profile.transitionSetFOVBias = tbl["transition_set_fov_bias"].value_or(profile.transitionSetFOVBias);
+            profile.transitionFOVBias = std::clamp(tbl["transition_fov_bias"].value_or(profile.transitionFOVBias), -1.5f, 1.5f);
             profile.transitionSetPitchBias = tbl["transition_set_pitch_bias"].value_or(profile.transitionSetPitchBias);
             profile.transitionPitchBias = std::clamp(tbl["transition_pitch_bias"].value_or(profile.transitionPitchBias), -1.5f, 1.5f);
             profile.SyncTransitionOverride();
@@ -276,10 +283,19 @@ namespace DietDrCamera
                 tbl.insert("transition_set_looseness", profile.transitionSetLooseness);
                 tbl.insert("transition_set_weight",    profile.transitionSetWeight);
                 tbl.insert("transition_set_aim_bias",  profile.transitionSetAimBias);
+                tbl.insert("transition_set_height_bias", profile.transitionSetHeightBias);
+                tbl.insert("transition_set_zoom_bias", profile.transitionSetZoomBias);
+                tbl.insert("transition_set_fov_bias", profile.transitionSetFOVBias);
                 tbl.insert("transition_set_pitch_bias", profile.transitionSetPitchBias);
             }
             if (profile.transitionAimBias != defaults.transitionAimBias)
                 tbl.insert("transition_aim_bias", static_cast<double>(profile.transitionAimBias));
+            if (profile.transitionHeightBias != defaults.transitionHeightBias)
+                tbl.insert("transition_height_bias", static_cast<double>(profile.transitionHeightBias));
+            if (profile.transitionZoomBias != defaults.transitionZoomBias)
+                tbl.insert("transition_zoom_bias", static_cast<double>(profile.transitionZoomBias));
+            if (profile.transitionFOVBias != defaults.transitionFOVBias)
+                tbl.insert("transition_fov_bias", static_cast<double>(profile.transitionFOVBias));
             if (profile.transitionPitchBias != defaults.transitionPitchBias)
                 tbl.insert("transition_pitch_bias", static_cast<double>(profile.transitionPitchBias));
             return tbl;
@@ -771,6 +787,12 @@ namespace DietDrCamera
             spdlog::warn("Preset is invalid or requires a newer Diet Dr Camera; settings were kept.");
             return false;
         }
+        auto parsedViews = cinematicViews;
+        if (!CinematicViews::ReadViews(tbl["cinematic_views"], parsedViews, ReadProfile)) {
+            spdlog::warn("Cinematic Views data is invalid; settings were kept.");
+            return false;
+        }
+        cinematicViews = std::move(parsedViews);
         presetFormatLoaded = static_cast<int>(tbl["meta"]["format"].value_or<std::int64_t>(0));
         CameraController::InvalidateProfileReferences();
 
@@ -944,6 +966,16 @@ namespace DietDrCamera
         summonShakeIntensityFp    = tbl["cinematic"]["summon"]["intensity_fp"]   .value_or(summonShakeIntensityFp);
         summonShakeSpeedFp        = tbl["cinematic"]["summon"]["speed_fp"]       .value_or(summonShakeSpeedFp);
         summonShakeRangeFp        = tbl["cinematic"]["summon"]["range_fp"]       .value_or(summonShakeRangeFp);
+        const auto readDamageReaction = [&](const char* view, DamageReaction::Tuning& tuning) {
+            const auto node = tbl["cinematic"]["damage_reaction"][view];
+            tuning.intensity = node["intensity"].value_or(tuning.intensity);
+            tuning = DamageReaction::Sanitize(tuning);
+        };
+        readDamageReaction("third_person", damageReaction);
+        readDamageReaction("first_person", damageReactionFp);
+        combatFraming.zoomIntensity = tbl["cinematic"]["combat_framing"]["zoom_intensity"].value_or(combatFraming.zoomIntensity);
+        combatFraming.fovIntensity = tbl["cinematic"]["combat_framing"]["fov_intensity"].value_or(combatFraming.fovIntensity);
+        combatFraming = CombatFraming::Sanitize(combatFraming);
         headBobIntensity              = tbl["cinematic"]["head_bob"]["intensity"]              .value_or(headBobIntensity);
         headBobIntensityFp            = tbl["cinematic"]["head_bob"]["intensity_fp"]           .value_or(headBobIntensityFp);
         stairSmoothStrength           = tbl["cinematic"]["stairs"]["strength"]                 .value_or(stairSmoothStrength);
@@ -1097,6 +1129,17 @@ namespace DietDrCamera
         archeryTracingSmoothTau = tbl["general"]["archery_tracing_smooth_tau"].value_or(archeryTracingSmoothTau);
         sneakMeterOffsetX       = tbl["general"]["sneak_meter_offset_x"].value_or(sneakMeterOffsetX);
         sneakMeterOffsetY       = tbl["general"]["sneak_meter_offset_y"].value_or(sneakMeterOffsetY);
+        // Before format 11 these controls applied to both views. Copy that
+        // authored behavior once, then let modern first-person keys stand alone.
+        if (tbl["meta"]["format"].value_or(0) < 11)
+            projectileTracingFp = GetProjectileTracing(false);
+        const auto tracingFp = tbl["projectile_tracing"]["first_person"];
+        projectileTracingFp.archeryEnabled = tracingFp["archery_enabled"].value_or(projectileTracingFp.archeryEnabled);
+        projectileTracingFp.spellEnabled = tracingFp["spell_enabled"].value_or(projectileTracingFp.spellEnabled);
+        projectileTracingFp.reticleSize = tracingFp["reticle_size"].value_or(projectileTracingFp.reticleSize);
+        projectileTracingFp.reticleThickness = tracingFp["reticle_thickness"].value_or(projectileTracingFp.reticleThickness);
+        projectileTracingFp.sneakEyeX = tracingFp["sneak_eye_x"].value_or(projectileTracingFp.sneakEyeX);
+        projectileTracingFp.sneakEyeY = tracingFp["sneak_eye_y"].value_or(projectileTracingFp.sneakEyeY);
         // First-person settings. Schema:
         //   [first_person] transition_speed
         //   [first_person.global] world_fov, hands_fov + .noise
@@ -2640,8 +2683,32 @@ namespace DietDrCamera
             insertTable("general", std::move(gen));
         }
 
+        // Independent first-person projectile tracing, sparse against defaults.
+        {
+            const auto& p = projectileTracingFp;
+            const ProjectileTracingSettings defaults;
+            toml::table first;
+            if (p.archeryEnabled != defaults.archeryEnabled) first.insert("archery_enabled", p.archeryEnabled);
+            if (p.spellEnabled != defaults.spellEnabled) first.insert("spell_enabled", p.spellEnabled);
+            if (p.reticleSize != defaults.reticleSize) first.insert("reticle_size", static_cast<double>(p.reticleSize));
+            if (p.reticleThickness != defaults.reticleThickness) first.insert("reticle_thickness", static_cast<double>(p.reticleThickness));
+            if (p.sneakEyeX != defaults.sneakEyeX) first.insert("sneak_eye_x", static_cast<double>(p.sneakEyeX));
+            if (p.sneakEyeY != defaults.sneakEyeY) first.insert("sneak_eye_y", static_cast<double>(p.sneakEyeY));
+            if (!first.empty()) insertTable("projectile_tracing", toml::table{{"first_person", std::move(first)}});
+        }
+
         // [cinematic]
         {
+            toml::table damage;
+            const auto writeDamageReaction = [&](const char* view, DamageReaction::Tuning tuning) {
+                tuning = DamageReaction::Sanitize(tuning);
+                const DamageReaction::Tuning defaults;
+                toml::table node;
+                if (tuning.intensity != defaults.intensity) node.insert("intensity", static_cast<double>(tuning.intensity));
+                if (!node.empty()) damage.insert(view, std::move(node));
+            };
+            writeDamageReaction("third_person", damageReaction);
+            writeDamageReaction("first_person", damageReactionFp);
             toml::table ds;
             if (dragonShakeBreathEnabled    != false)   ds.insert("breath_enabled",     dragonShakeBreathEnabled);
             if (dragonShakeBreathAmp        != 0.0f)    ds.insert("breath_amp",         static_cast<double>(dragonShakeBreathAmp));
@@ -2954,8 +3021,14 @@ namespace DietDrCamera
             }
 
             const bool anyCinematic = !ds.empty() || !cen.empty() || !ww.empty() || !vl.empty() || !wwr.empty() || !vlr.empty() || !cp.empty() || !al.empty() || !pr.empty() || !ff.empty() || !jp.empty() || !hb.empty() || !st.empty() || !wd.empty() || !vb.empty() || !ra.empty() || !su.empty() || !stn.empty() || !beatTables.empty() || !npcn.empty() || !pgl.empty();
-            if (anyCinematic) {
+            if (!cinematicViews.empty()) root.insert("cinematic_views", CinematicViews::WriteViews(cinematicViews,
+                [](const CameraProfile& profile) { return WriteProfile(profile,CameraProfile::Default3p()); }));
+            const auto framing = CombatFraming::Sanitize(combatFraming);
+            if (anyCinematic || !damage.empty() || framing.zoomIntensity > 0 || framing.fovIntensity > 0) {
                 toml::table cin;
+                if (framing.zoomIntensity > 0 || framing.fovIntensity > 0)
+                    cin.insert("combat_framing", toml::table{{"zoom_intensity", framing.zoomIntensity}, {"fov_intensity", framing.fovIntensity}});
+                if (!damage.empty()) cin.insert("damage_reaction", std::move(damage));
                 if (!ds.empty())  cin.insert("dragons",                std::move(ds));
                 if (!cen.empty()) cin.insert("centurion",              std::move(cen));
                 if (!ww.empty())  cin.insert("werewolf_transform",     std::move(ww));
@@ -4513,6 +4586,9 @@ namespace DietDrCamera
         ragdollCamFov             = std::clamp(ragdollCamFov, 40.0f, 140.0f);
         ragdollCamSlowmoStrength  = std::clamp(ragdollCamSlowmoStrength, 0.0f, 90.0f);
         ragdollCamSlowmoDuration  = std::clamp(ragdollCamSlowmoDuration, 0.0f, 15.0f);
+        damageReaction = DamageReaction::Sanitize(damageReaction);
+        damageReactionFp = DamageReaction::Sanitize(damageReactionFp);
+        combatFraming = CombatFraming::Sanitize(combatFraming);
         headBobIntensity        = std::clamp(headBobIntensity,   0.0f, 5.0f);
         headBobIntensityFp      = std::clamp(headBobIntensityFp, 0.0f, 5.0f);
         targetLockAimBias       = std::clamp(targetLockAimBias, -1.5f, 1.5f);
@@ -4728,6 +4804,10 @@ namespace DietDrCamera
         paraglideTLProfile            = CameraProfile{};
         paraglideNoise                = NoiseProfile{};
         paraglideNoiseIndoor          = NoiseProfile{};
+        damageReaction = {};
+        damageReactionFp = {};
+        combatFraming = {};
+        cinematicViews.clear();
         headBobIntensity              = 0.0f;
         headBobIntensityFp            = 0.0f;
         stairSmoothStrength           = 0.0f;
@@ -4786,6 +4866,7 @@ namespace DietDrCamera
         archeryTracingSmoothTau = 0.015f;
         sneakMeterOffsetX       = -500.0f;
         sneakMeterOffsetY       = -100.0f;
+        projectileTracingFp = {};
         firstPersonFovEnabled      = true;   // always-on (toggle removed)
         firstPersonNoiseEnabled    = true;   // always-on (toggle removed)
         firstPersonGlobal          = FirstPersonProfile{};
@@ -5449,6 +5530,9 @@ namespace DietDrCamera
         // and the lock-aim solve reads the winner off the composed profile.
         // Enemy > entry > global, with no separate resolution path.
         if (src.transitionSetAimBias)  { dst.transitionSetAimBias  = true; dst.transitionAimBias  = src.transitionAimBias; }
+        if (src.transitionSetHeightBias) { dst.transitionSetHeightBias = true; dst.transitionHeightBias = src.transitionHeightBias; }
+        if (src.transitionSetZoomBias) { dst.transitionSetZoomBias = true; dst.transitionZoomBias = src.transitionZoomBias; }
+        if (src.transitionSetFOVBias) { dst.transitionSetFOVBias = true; dst.transitionFOVBias = src.transitionFOVBias; }
         if (src.transitionSetPitchBias) { dst.transitionSetPitchBias = true; dst.transitionPitchBias = src.transitionPitchBias; }
         dst.SyncTransitionOverride();
     }
@@ -5900,6 +5984,7 @@ namespace DietDrCamera
         // Not shoulder-framed, so they live here rather than in either half â€”
         // which is exactly why the swap can iterate the halves safely.
         out.push_back(&vanityCamera);
+        // Deferred cinematic view definitions are stored only, not active profiles.
         out.push_back(&dialogueProfile);
         out.push_back(&dialogueFirstPersonProfile);
         const auto tl = GetTargetLockProfiles();
@@ -6390,29 +6475,6 @@ namespace DietDrCamera
             }
         }
         return nullptr; // idle/global noise never supplies an impact
-    }
-
-    const SettingsManager::NoiseProfile* SettingsManager::ResolveNpcArcheryNoise(
-        bool crossbow, bool sneak, bool mounted, const ItemBindings::EquippedItem& item, std::string* outKey)
-    {
-        if (outKey) outKey->clear();
-        auto* binding = ItemBindings::FindBest(weaponBindings,
-            static_cast<int>(crossbow ? BindingCategory::Crossbow : BindingCategory::Bow), false, item);
-        for (int slot : {sneak ? 5 : -1, 2, sneak ? 4 : -1, 0})
-            if (const auto* p = ResolveNpcBindingNoise(binding, slot, outKey)) return p;
-        if (mounted) {
-            if (auto* p = FindNpcStateNoise("mounts.horseback.archery.draw", outKey)) return p;
-            if (auto* p = FindNpcStateNoise("mounts.horseback.archery", outKey)) return p;
-        }
-        const std::string base = crossbow ? "weapons.crossbow" : "weapons.bow";
-        if (sneak) {
-            if (auto* p = FindNpcStateNoise(base + ".sneak.draw", outKey)) return p;
-        }
-        if (auto* p = FindNpcStateNoise(base + ".draw", outKey)) return p;
-        if (sneak) {
-            if (auto* p = FindNpcStateNoise(base + ".sneak", outKey)) return p;
-        }
-        return FindNpcStateNoise(base, outKey);
     }
 
     const SettingsManager::NoiseProfile* SettingsManager::ResolveNpcShoutNoise(

@@ -1,5 +1,8 @@
 #include "PCH.h"
 #include "Camera/MagicHitShakeController.h"
+#include "Camera/DamageReactionController.h"
+#include "Camera/CameraNoiseController.h"
+#include "Hooks/MissileProjectileDetour.h"
 #include "Camera/MagicCast.h"
 #include "Camera/StateResolver.h"
 #include "Core/MagicHitShake.h"
@@ -18,10 +21,12 @@ namespace DietDrCamera::MagicHitShakeController
                                 RE::hkpCollidable*, std::int32_t, std::uint32_t);
         UpdateFn originalUpdate = nullptr;
         ImpactFn originalImpact = nullptr;
+        UpdateFn originalConeUpdate = nullptr;
+        ImpactFn originalConeImpact = nullptr;
 
         double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
-        bool DiscreteMissile(RE::BGSProjectile* base)
+        bool DiscreteMissile(const RE::BGSProjectile* base)
         {
             return base && base->IsMissile() &&
                 base->data.flags.none(RE::BGSProjectileData::BGSProjectileFlags::kContinuousUpdate);
@@ -63,12 +68,25 @@ namespace DietDrCamera::MagicHitShakeController
         void UpdateProjectile(RE::Projectile* projectile, float dt)
         {
             if (PlayerMissile(projectile)) Observe(projectile, Now());
+            if (projectile) {
+                CameraNoiseController::NotifyNpcMagicFlight(projectile, projectile->GetPosition());
+                const auto& data = projectile->GetProjectileRuntimeData();
+                const auto* base = projectile->GetBaseObject();
+                if (data.spell && base && data.flags.none(RE::Projectile::Flags::kMoved) && DiscreteMissile(base->As<RE::BGSProjectile>())) {
+                    const auto shooter = data.shooter.get();
+                    if (shooter && !shooter->IsPlayerRef()) CameraNoiseController::NotifyNpcMagicShot(
+                        data.shooter, data.spell->GetFormID(), projectile->GetFormID());
+                }
+            }
             originalUpdate(projectile, dt);
         }
 
         void AddImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
                        const RE::NiPoint3& velocity, RE::hkpCollidable* collidable, std::int32_t arg6, std::uint32_t arg7)
         {
+            CameraNoiseController::NotifyNpcMagicFlight(projectile, position, true, target && target->IsPlayerRef());
+            DamageReactionController::ObserveProjectile(projectile, target);
+            MissileProjectileDetour::ObserveImpact(projectile, position);
             const bool eligible = PlayerMissile(projectile) && target &&
                 ArcheryHitShake::TargetEligible(target->IsActor(), target->IsPlayerRef());
             MagicHitShake::ProjectileIdentity id{};
@@ -90,6 +108,24 @@ namespace DietDrCamera::MagicHitShakeController
             // cross this call; neither impacts nor trajectories are changed.
             originalImpact(projectile, target, position, velocity, collidable, arg6, arg7);
             if (eligible) bridge.Contact(id, magic, targetID, travel, now, distance);
+        }
+
+        void UpdateCone(RE::Projectile* projectile, float dt)
+        {
+            if (projectile) CameraNoiseController::NotifyNpcMagicFlight(projectile, projectile->GetPosition());
+            originalConeUpdate(projectile, dt);
+        }
+
+        void ConeImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
+                        const RE::NiPoint3& velocity, RE::hkpCollidable* collidable, std::int32_t arg6, std::uint32_t arg7)
+        {
+            // Moving area waves survive actor contacts. A contact location is
+            // on the cone's surface, not an observed flight position; use its
+            // center and only cancel tracking when the wave hits the player.
+            const bool hitPlayer = target && target->IsPlayerRef();
+            if (projectile) CameraNoiseController::NotifyNpcMagicFlight(
+                projectile, projectile->GetPosition(), hitPlayer, hitPlayer);
+            originalConeImpact(projectile, target, position, velocity, collidable, arg6, arg7);
         }
 
         RE::MagicItem* HandMagic(RE::PlayerCharacter* player, bool left, RE::TESObjectWEAP*& staff)
@@ -177,8 +213,11 @@ namespace DietDrCamera::MagicHitShakeController
         REL::Relocation<std::uintptr_t> table{RE::VTABLE_MissileProjectile[0]};
         originalUpdate = reinterpret_cast<UpdateFn>(table.write_vfunc(0xAB, &UpdateProjectile));
         originalImpact = reinterpret_cast<ImpactFn>(table.write_vfunc(0xBD, &AddImpact));
+        REL::Relocation<std::uintptr_t> coneTable{RE::VTABLE_ConeProjectile[0]};
+        originalConeUpdate = reinterpret_cast<UpdateFn>(coneTable.write_vfunc(0xAB, &UpdateCone));
+        originalConeImpact = reinterpret_cast<ImpactFn>(coneTable.write_vfunc(0xBD, &ConeImpact));
         Subscribe();
-        spdlog::debug("[HITSHAKE-MAGIC] native missile launch/contact observers installed; actor contacts, one impulse per cast");
+        spdlog::info("[HITSHAKE-MAGIC] native missile launch/flyby/contact and moving-cone flyby/contact observers installed");
     }
 
     void Reset() { bridge.SetView(-1); }

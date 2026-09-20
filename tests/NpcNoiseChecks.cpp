@@ -14,6 +14,26 @@ static void Require(bool condition, const char* message)
 
 int main() try
 {
+    namespace Reaction = DietDrCamera::DamageReaction;
+    for (const auto race : {"DragonRace", "DLC1UndeadDragonRace", "DwarvenCenturionRace", "DLC1LD_ForgemasterRace"}) {
+        const bool dragonKeyword = std::string_view(race).find("DragonRace") != std::string_view::npos;
+        const auto family = Reaction::CreatureFamily(race, "", false, dragonKeyword, false, false);
+        Require(OwnsCinematicNoise(family), "Dragon/centurion variant leaks into generic cast, shout or launch noise");
+    }
+    Require(OwnsCinematicNoise(Reaction::CreatureFamily("ModConstruct", "Actors/DwarvenSteamCenturion/Character Assets/skeleton.nif", false, false, false, true)),
+        "A renamed centurion loses its dedicated cinematic ownership");
+    for (const auto race : {"WolfRace", "BearBlackRace", "FrostbiteSpiderRace", "DwarvenBallistaRace", "DLC2LurkerRace"})
+        Require(!OwnsCinematicNoise(Reaction::CreatureFamily(race, "", false, false, true, false)),
+            "The cinematic exclusion muted ordinary creature noise");
+    CastTracker firstCast, secondCast;
+    Require(firstCast.Observe(42, 0, 10) && !firstCast.Observe(42, 101, 10.01),
+        "A cast event and its projectile release produce two noise beats");
+    Require(!firstCast.Observe(42, 101, 10.02) && firstCast.Observe(42, 102, 10.02),
+        "Repeated projectile updates replay, or distinct rapid shots are lost");
+    Require(secondCast.Observe(42, 103, 10.02), "Two nearby creatures share a cast receipt");
+    firstCast = {};
+    Require(firstCast.Observe(42, 101, 10.02), "Disabling noise retains old cast receipts");
+    Require(firstCast.Observe(43, 104, 10.03), "Independent spells suppress each other");
     Require(!EnabledForEitherView(0, 0), "Disabled NPC sources still scan");
     Require(EnabledForEitherView(0, 1), "First-person-only NPC noise cannot start");
     Require(EnabledForEitherView(1, 0), "Third-person-only NPC noise cannot start");
@@ -67,11 +87,6 @@ int main() try
     }
     Require(!RefreshConcentration(true, 0), "Paused concentration re-arms continuously");
 
-    Require(IsNewNpcArcheryShot(true, false, true, true), "NPC arrow/bolt spawn is ignored");
-    Require(!IsNewNpcArcheryShot(false, false, true, true), "Flying arrow produces repeated beats");
-    Require(!IsNewNpcArcheryShot(true, true, true, true), "Player arrow is counted as NPC noise");
-    Require(!IsNewNpcArcheryShot(true, false, false, true) &&
-            !IsNewNpcArcheryShot(true, false, true, false), "Non-archery or source-less projectile creates a beat");
     Require(FreshArcheryShot(0.01f) && !FreshArcheryShot(0.5f) && !FreshArcheryShot(-1),
             "Delayed shots can replay after a menu/load handoff");
     ArcheryShotQueue<int, 4> queue;

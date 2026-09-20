@@ -1,10 +1,17 @@
 #pragma once
 
 #include <atomic>
+#include <optional>
 #include <Windows.h>
 
 namespace DietDrCamera::MenuFrameworkBinding
 {
+    // Public SMF window ABI. Risa uses these same two atomics to open and close
+    // the main window without calling the framework's event-dispatching path.
+    struct WindowInterface {
+        std::atomic<bool> IsOpen{false};
+        std::atomic<bool> BlockUserInput{true};
+    };
     inline HMODULE Module() noexcept
     {
         // SKSE 2.0.20 loads DDC before Menu Framework. Resolving during DDC's
@@ -34,6 +41,17 @@ namespace DietDrCamera::MenuFrameworkBinding
         const auto getContext = reinterpret_cast<GetContext>(
             GetProcAddress(module, "igGetCurrentContext"));
         return getContext && getContext() != nullptr;
+    }
+
+    inline std::optional<bool> MainWindowOpen() noexcept
+    {
+        const auto module = Module();
+        if (!module) return std::nullopt;
+        using GetWindow = WindowInterface* (*)();
+        static const auto getWindow = reinterpret_cast<GetWindow>(GetProcAddress(module,"GetMainWindow"));
+        if (!getWindow) return std::nullopt;
+        const auto* window = getWindow();
+        return window ? std::optional<bool>{window->IsOpen.load(std::memory_order_relaxed)} : std::nullopt;
     }
 }
 

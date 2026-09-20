@@ -4,6 +4,7 @@
 #include <Windows.h>
 #include "vendor/OpenAnimationReplacerAPI-Animations.h"
 #include "Camera/AnimationCameraController.h"
+#include "Camera/DamageReactionController.h"
 #include "Camera/AnimationCatalog.h"
 #include "Settings/SettingsManager.h"
 
@@ -201,6 +202,7 @@ namespace DietDrCamera
                                                        const RE::hkbContext& a_context)
     {
         _origActivate(a_this, a_context);
+        DamageReactionController::ObserveClip(a_this, a_context.character, true);
         auto& c = GetSingleton();
         const void* ch = a_context.character;
         // 3p graph ONLY (user ruling 2026-08-30: "first person animations
@@ -218,6 +220,7 @@ namespace DietDrCamera
     void AnimationCameraController::HookedClipDeactivate(RE::hkbClipGenerator* a_this,
                                                          const RE::hkbContext& a_context)
     {
+        DamageReactionController::ObserveClip(a_this, a_context.character, false);
         auto& c = GetSingleton();
         const void* ch = a_context.character;
         if (ch && ch == c._playerChar3p.load(std::memory_order_relaxed))
@@ -229,6 +232,7 @@ namespace DietDrCamera
         const RE::hkbContext& a_context, float a_delta)
     {
         _origUpdate(a_this, a_context, a_delta);
+        DamageReactionController::ObserveClip(a_this, a_context.character, true, true);
         auto& c = GetSingleton();
         if (a_context.character && a_context.character == c._playerChar3p.load(std::memory_order_relaxed))
             c.OnPlayerClip(a_this, true, true);

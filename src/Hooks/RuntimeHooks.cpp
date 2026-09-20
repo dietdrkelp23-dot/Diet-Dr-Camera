@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Core/Diagnostics.h"
 #include "Hooks/RuntimeHooks.h"
 #include "Hooks/RuntimePatchInspection.h"
 
@@ -6,6 +7,7 @@
 #include <array>
 #include <cstring>
 #include <span>
+#include <stdexcept>
 
 namespace DietDrCamera::RuntimeHooks
 {
@@ -15,15 +17,29 @@ namespace DietDrCamera::RuntimeHooks
         bool prepared = false;
         std::array<std::uint8_t, 6> uiBranchBytes{};
         std::string inspecting;
+        std::uintptr_t inspectingAddress{};
+
+        void LogInspectionBytes()
+        {
+            if (!inspectingAddress) return;
+            Diagnostics::LogBytes("Inspection start", inspectingAddress, 96);
+        }
 
         [[noreturn]] void Fail(std::string_view detail)
         {
-            const auto message = fmt::format("Diet Dr Camera cannot install its hooks on Skyrim {}: {}. "
-                "No gameplay should be started with this combination. See DietDrCamera.log.",
+            LogInspectionBytes();
+            const auto message = fmt::format("Diet Dr Camera hook validation failed on Skyrim {}: {}. "
+                "An executable layout difference or another DLL's patch can cause this. "
+                "Report this full message together with DietDrCamera.log and skse64.log.\nLog: {}",
                 REL::Module::get().version().string(), inspecting.empty() ? std::string(detail) :
-                    fmt::format("{} ({})", detail, inspecting));
+                    fmt::format("{} ({})", detail, inspecting), Diagnostics::LogLocation());
             spdlog::critical("{}", message);
+            spdlog::default_logger()->flush();
+#ifdef ENABLE_COMMONLIBSSE_TESTING
+            throw std::runtime_error(message);
+#else
             SKSE::stl::report_and_fail(message);
+#endif
         }
 
         std::span<const std::uint8_t> Function(std::uintptr_t address)
@@ -83,19 +99,48 @@ namespace DietDrCamera::RuntimeHooks
                 size <= info.RegionSize - (address - reinterpret_cast<std::uintptr_t>(info.BaseAddress));
         }
 
+        void LogCalls(std::span<const std::uint8_t> code, std::uintptr_t address, std::uintptr_t expected)
+        {
+            spdlog::critical("[Runtime] Expected native call target {}", Diagnostics::DescribeAddress(expected));
+            const auto decoded = RuntimePatchInspection::Decode(code, address);
+            if (!decoded) {
+                spdlog::critical("[Runtime] Call listing unavailable: instruction decoding failed");
+                return;
+            }
+            std::size_t logged{};
+            for (const auto& instruction : *decoded) {
+                if (instruction.opcode != 0xE8 || instruction.length != 5) continue;
+                if (++logged > 64) {
+                    spdlog::critical("[Runtime] Further calls omitted after 64 entries");
+                    break;
+                }
+                spdlog::critical("[Runtime] Observed call +0x{:X} -> {}", instruction.offset,
+                    Diagnostics::DescribeBranchTarget(instruction.target));
+                Diagnostics::LogBytes("Call site", address + instruction.offset, 16);
+            }
+        }
+
         std::uintptr_t FindCall(std::string_view name, REL::RelocationID caller, REL::RelocationID callee,
             std::size_t legacySE = 0, std::size_t legacyAE = 0)
         {
-            const auto address = caller.address();
-            const auto target = callee.address();
             inspecting = fmt::format("{}, caller ID {}, callee ID {}", name, caller.id(), callee.id());
+            inspectingAddress = 0;
+            spdlog::info("[Runtime] Resolving {}", inspecting);
+            const auto address = caller.address();
+            inspectingAddress = address;
+            const auto target = callee.address();
             const auto code = Function(address);
-            spdlog::info("[Runtime] Inspecting {}: RVA 0x{:X}, {} bytes", inspecting,
-                address - REL::Module::get().base(), code.size());
+            spdlog::info("[Runtime] Inspecting {}: RVA 0x{:X}, {} bytes; expected native target {}", inspecting,
+                address - REL::Module::get().base(), code.size(), Diagnostics::DescribeAddress(target));
             std::optional<std::size_t> offset;
             // Established 1.5/1.6 sites may already be chained by another camera plugin.
             // Only accept an actual instruction boundary calling executable code outside Skyrim.
-            if (REL::Module::get().version() < SKSE::RUNTIME_SSE_1_7_99) {
+            // The same camera/furniture call sites were also checked in the
+            // 1.7.99 and 1.7.104 executables. Newer builds require a native target
+            // until their call sites have been independently reviewed.
+            if (REL::Module::get().version() < SKSE::RUNTIME_SSE_1_7_99 ||
+                REL::Module::get().version() == SKSE::RUNTIME_SSE_1_7_99 ||
+                REL::Module::get().version() == SKSE::RUNTIME_SSE_1_7_104) {
                 const auto legacy = REL::Module::IsAE() ? legacyAE : legacySE;
                 if (legacy) {
                     if (const auto instruction = RuntimePatchInspection::CallAt(code, address, legacy)) {
@@ -106,15 +151,25 @@ namespace DietDrCamera::RuntimeHooks
                             VirtualQuery(reinterpret_cast<const void*>(instruction->target), &info, sizeof(info)) &&
                             reinterpret_cast<std::uintptr_t>(info.AllocationBase) != REL::Module::get().base()) {
                             offset = legacy;
-                            spdlog::info("[Runtime] {} chains another plugin at +0x{:X}", name, legacy);
+                            spdlog::info("[Runtime] {} chains another plugin at +0x{:X}: {}", name, legacy,
+                                Diagnostics::DescribeBranchTarget(instruction->target));
                         }
                     }
                 }
             }
             if (!offset) {
                 const auto decoded = RuntimePatchInspection::Decode(code, address);
-                if (!decoded) Fail("cannot decode engine function");
+                if (!decoded) {
+                    const auto legacy = REL::Module::IsAE() ? legacyAE : legacySE;
+                    if (legacy && legacy < code.size()) Diagnostics::LogBytes("Established call site", address + legacy);
+                    Fail("cannot decode engine function");
+                }
                 offset = RuntimePatchInspection::UniqueCall(*decoded, target);
+                if (!offset) {
+                    const auto legacy = REL::Module::IsAE() ? legacyAE : legacySE;
+                    if (legacy && legacy < code.size()) Diagnostics::LogBytes("Established call site", address + legacy);
+                    LogCalls(code, address, target);
+                }
             }
             if (!offset) Fail(fmt::format("missing or ambiguous {} call", name));
             spdlog::info("[Runtime] {}: ID {} +0x{:X}", name, caller.id(), *offset);
@@ -128,10 +183,36 @@ namespace DietDrCamera::RuntimeHooks
         Sites resolved{};
         resolved.cameraUpdate = FindCall("TESCamera::Update", REL::RelocationID{49852, 50784}, REL::RelocationID{32289, 33025}, 0x1A6, 0x1A6);
         resolved.enterFurniture = FindCall("EnterFurniture", REL::RelocationID{17034, 17420}, REL::RelocationID{49880, 50813}, 0x295, 0x2A2);
+        spdlog::info("[Runtime] Resolving UI job dependencies: ProcessMessages ID {}, AdvanceMovies ID {}, GetConsole ID {}, UI job ID {}",
+            REL::RelocationID(79945, 82082).id(), REL::RelocationID(79946, 82083).id(),
+            REL::RelocationID(52063, 52950).id(), REL::RelocationID(38088, 39042).id());
+        resolved.processMessages = REL::RelocationID(79945, 82082).address();
+        resolved.advanceMovies = REL::RelocationID(79946, 82083).address();
+        resolved.getConsole = REL::RelocationID(52063, 52950).address();
+        const auto job = REL::RelocationID(38088, 39042).address();
+        inspecting = "UI job pause guard and UI/console calls";
+        inspectingAddress = job;
+        spdlog::info("[Runtime] Inspecting UI job {}; expected calls: ProcessMessages={}, AdvanceMovies={}, GetConsole={}",
+            Diagnostics::DescribeAddress(job), Diagnostics::DescribeAddress(resolved.processMessages),
+            Diagnostics::DescribeAddress(resolved.advanceMovies), Diagnostics::DescribeAddress(resolved.getConsole));
+        auto uiJob = RuntimePatchInspection::InspectUIJob(Function(job), job,
+            resolved.processMessages, resolved.advanceMovies, resolved.getConsole);
+        if (!uiJob || !IsExecutable(uiJob->executeConsole)) Fail("unrecognized UI job control flow");
+        if (uiJob->alreadyDisabled) {
+            Diagnostics::LogBytes("Already patched UI branch", job + uiJob->branchOffset);
+            Fail("the UI job was already disabled by another patch; a second unpaused-menu UI driver cannot be installed");
+        }
+        resolved.uiJobBranch = job + uiJob->branchOffset;
+        resolved.uiJobBranchLength = uiJob->branchLength;
+        resolved.executeConsole = uiJob->executeConsole;
+        spdlog::info("[Runtime] UI job pause guard: +0x{:X}, {} bytes", uiJob->branchOffset, uiJob->branchLength);
         resolved.mainUpdate = FindCall("ScrapHeap::KeepPages", REL::RelocationID{35565, 36564}, REL::RelocationID{66889, 68150});
+        spdlog::info("[Runtime] Resolving dialogue timer: caller ID {}, callee ID {}",
+            REL::RelocationID(36540, 37541).id(), REL::RelocationID(38327, 39302).id());
         const auto dialogue = REL::RelocationID(36540, 37541).address();
         const auto timerTarget = REL::RelocationID(38327, 39302).address();
         inspecting = "dialogue close timer";
+        inspectingAddress = dialogue;
         const auto dialogueCode = Function(dialogue);
         if (REL::Module::get().version() < SKSE::RUNTIME_SSE_1_7_99) {
             // SkyrimSoulsRE's SE 2.2.2 / AE ports establish these decrement sites.
@@ -145,23 +226,18 @@ namespace DietDrCamera::RuntimeHooks
             if (timer && IsEngineData(timer->multiplier, sizeof(float)) && *reinterpret_cast<const float*>(timer->multiplier) == -1.0f)
                 resolved.dialogueTimer = dialogue + timer->offset;
         }
-        if (!resolved.dialogueTimer) Fail("unrecognized dialogue timer decrement");
+        if (!resolved.dialogueTimer) {
+            const auto establishedOffset = REL::Module::IsAE() ? 0x6E8u : 0x4F9u;
+            if (establishedOffset < dialogueCode.size()) Diagnostics::LogBytes("Established dialogue timer site", dialogue + establishedOffset);
+            LogCalls(dialogueCode, dialogue, timerTarget);
+            Fail("unrecognized dialogue timer decrement");
+        }
         spdlog::info("[Runtime] dialogue close timer: +0x{:X}", resolved.dialogueTimer - dialogue);
-        resolved.processMessages = REL::RelocationID(79945, 82082).address();
-        resolved.advanceMovies = REL::RelocationID(79946, 82083).address();
-        resolved.getConsole = REL::RelocationID(52063, 52950).address();
-        const auto job = REL::RelocationID(38088, 39042).address();
-        inspecting = "UI job pause guard and UI/console calls";
-        auto uiJob = RuntimePatchInspection::InspectUIJob(Function(job), job,
-            resolved.processMessages, resolved.advanceMovies, resolved.getConsole);
-        if (!uiJob || !IsExecutable(uiJob->executeConsole)) Fail("unrecognized UI job control flow");
-        resolved.uiJobBranch = job + uiJob->branchOffset;
-        resolved.uiJobBranchLength = uiJob->branchLength;
-        resolved.executeConsole = uiJob->executeConsole;
         std::memcpy(uiBranchBytes.data(), reinterpret_cast<const void*>(resolved.uiJobBranch), resolved.uiJobBranchLength);
         sites = resolved;
         prepared = true;
         inspecting.clear();
+        inspectingAddress = 0;
         spdlog::info("[Runtime] All instruction patch sites validated for Skyrim {}", REL::Module::get().version().string());
     }
 
@@ -173,14 +249,24 @@ namespace DietDrCamera::RuntimeHooks
 
     void RequireCall(std::uintptr_t address)
     {
-        if (*reinterpret_cast<const std::uint8_t*>(address) != 0xE8) Fail("a call site changed after preflight");
+        if (*reinterpret_cast<const std::uint8_t*>(address) != 0xE8) {
+            inspecting = fmt::format("installing call at {}; expected E8 opcode", Diagnostics::DescribeAddress(address));
+            inspectingAddress = address;
+            Fail("a call site changed after preflight");
+        }
     }
 
     void DisableUIJob()
     {
         const auto& current = Get();
-        if (std::memcmp(uiBranchBytes.data(), reinterpret_cast<const void*>(current.uiJobBranch), current.uiJobBranchLength))
+        if (std::memcmp(uiBranchBytes.data(), reinterpret_cast<const void*>(current.uiJobBranch), current.uiJobBranchLength)) {
+            inspecting = "installing UI job branch";
+            inspectingAddress = current.uiJobBranch;
+            std::string expected;
+            for (std::size_t i = 0; i < current.uiJobBranchLength; ++i) expected += fmt::format("{:02X} ", uiBranchBytes[i]);
+            spdlog::critical("[Runtime] Expected UI branch bytes from preflight: {}", expected);
             Fail("another plugin changed the UI job after preflight");
+        }
         if (current.uiJobBranchLength == 2) {
             REL::safe_write(current.uiJobBranch, std::uint8_t{0xEB});
         } else {

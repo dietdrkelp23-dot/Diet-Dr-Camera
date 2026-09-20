@@ -1,59 +1,45 @@
-DIET DR CAMERA 1.1.1 - NEXUS UPDATE DIRECTIONS
+DIET DR CAMERA 1.2.0 - NEXUS UPDATE DIRECTIONS
 
 1. OPEN THE EXISTING MOD PAGE
 
 https://www.nexusmods.com/skyrimspecialedition/mods/191847
-Use the page's management/edit controls to add the update to its Files section.
-The author will upload these files manually. Nothing here sends a support reply
-or uploads a file automatically.
+Add the update to this page's Files section. These are prepared local files;
+no upload, support message or GitHub publication has been performed.
 
-2. UPLOAD THE MAIN FILE
+2. MAIN FILE
 
 File: Desktop/Diet Dr Camera - Mod/Diet Dr Camera.zip
 Display name: Diet Dr Camera
-Version: 1.1.1
+Version: 1.2.0
 Category: Main files
-Description: Camera plugin update with startup compatibility fixes, direct
-numeric slider editing, whole-tab copy/paste, and Target Lock Pitch Bias.
-Requires matching SKSE64, Address Library and SKSE Menu Framework 3.
+Description: Adds improved startup logging for compatibility reports, expanded
+Damage Reaction and projectile flyby noise, Crowd Modifier, Target Lock biases,
+and independent first-/third-person projectile tracing. Existing presets remain
+readable. Requires matching SKSE64, Address Library and SKSE Menu Framework 3.
 Enable mod-manager downloads. Upload the ZIP itself, not its containing folder.
 
-3. UPLOAD THE MATCHING SOURCE
+3. MATCHING SOURCE
 
 File: Desktop/Diet Dr Camera - Source/Diet Dr Camera - Source.zip
 Display name: Diet Dr Camera - Source
-Version: 1.1.1
+Version: 1.2.0
 Category: Miscellaneous files
-Description: Full corresponding 1.1.1 source, bundled dependencies, pinned
-recipes, tests, licenses and build instructions. For developers; not required
-for playing and not intended for installation through MO2/Vortex.
-Use manual download only, if the form offers that option.
+Description: Full corresponding 1.2.0 source, bundled dependencies, pinned
+recipes, tests, licenses, build instructions and startup support guide. For
+developers; not required for playing or installation through MO2/Vortex.
+Use manual download only if available. Publish alongside the main file.
 
-4. UPDATE THE PAGE
+4. PAGE TEXT
 
-Set the page version to 1.1.1 and paste CHANGELOG-1.1.1.txt as its changelog.
-The updated Description - Nexus BBCode.txt is available if you want to refresh
-the page text. At minimum, add these two links to the existing description:
-Source: https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/tree/v1.1.1
-Build: https://github.com/dietdrkelp23-dot/Diet-Dr-Camera/blob/v1.1.1/BUILDING.md
-Keep existing requirements, credits, permissions and screenshots.
+Set the page version to 1.2.0. Use CHANGELOG-1.2.0.txt for the changelog and
+Description - Nexus BBCode.txt for the updated feature/support description.
+LOGS AND SUPPORT.txt is ready for a pinned compatibility-report post.
+Keep existing requirements, credits, permissions and screenshots. The matching
+source ZIP includes BUILDING.md; do not advertise an unpublished v1.2.0 GitHub tag.
 
-Existing required mods: Address Library 32444, SKSE Menu Framework 120352,
-ImGui Icons 114790; SKSE64 and the VC++ x64 runtime are external requirements.
-TDM 51614 and OAR 92109 remain optional integrations.
+Keep the runtime claims qualified: offline hook checks do not prove gameplay
+compatibility, and GOG executable testing remains incomplete. The new logging
+helps investigate reports; it does not establish that every version is fixed.
 
-5. FOLLOW UP ON SECURITY REVIEW
-
-Reply to Dominic in the existing Nexus support conversation using the draft
-and links in SECURITY-REVIEW.txt. Include the mod page link above.
-Keep the flagged 1.0 file available for staff to inspect while review is open;
-do not delete it to try to clear the warning. The old 1.0 source tag remains
-available alongside 1.1.1. Uploading a new version does not itself complete
-the staff review or guarantee a change to the security badge.
-
-Do not upload PDBs, manifests, test logs, source folders or private runtime
-fixtures as extra main files. The two prepared ZIPs contain the intended payloads.
-
-Official guidance checked September 15, 2026; exact UI wording may vary:
-https://help.nexusmods.com/article/117-why-has-my-mod-been-quarantined
-https://help.nexusmods.com/article/128-anti-virus-false-positives
+Only the two prepared ZIPs are upload payloads. Keep private symbols, manifests,
+test logs, personal settings and game fixtures with the local release records.

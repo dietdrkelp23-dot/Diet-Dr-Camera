@@ -24,6 +24,11 @@ namespace DietDrCamera
 {
     namespace
     {
+        ProjectileTracingSettings ActiveTracingSettings()
+        {
+            const auto* camera = RE::PlayerCamera::GetSingleton();
+            return SettingsManager::GetSingleton().GetProjectileTracing(camera && camera->IsInFirstPerson());
+        }
         // Release-anchor calibration cache (see CrosshairManager.h).
         constexpr auto kTraceCalibPath = "Data/SKSE/Plugins/DietDrCamera/TraceCalibration.toml";
 
@@ -375,8 +380,75 @@ namespace DietDrCamera
 
     void CrosshairManager::Shutdown()
     {
-        RestoreCrosshair();
-        RestoreStealthMeter();
+        ResetTracing();
+    }
+
+    void CrosshairManager::ResetTracing()
+    {
+        if (baselineCaptured_) { RestoreCrosshair(); RestoreStealthMeter(); }
+        { std::scoped_lock lock(firedShotsMutex_); firedShots_.clear(); }
+        { std::scoped_lock lock(liveSpellPreviewsMutex_); liveSpellPreviews_.clear(); }
+        { std::scoped_lock lock(trajectoryMutex_); trajectoryHud_.clear(); showTrajectory_ = false; }
+        { std::scoped_lock lock(lastArrowWorldPathMutex_); lastArrowWorldPath_.clear(); }
+        for (auto& caster : casterDebounce_) caster = {};
+        for (auto& hand : perHandWasChargingHostile_) hand = false;
+        for (auto& hand : perHandSawFiringInCycle_) hand = false;
+        magicWasCharging_ = magicReleaseBridge_ = stringWasTautLast_ = smoothedValid_ = bowDrawTimerArmed_ = false;
+        magicLastChargeSec_ = lastBowFireWallSec_ = -1000;
+        lastTickWallSec_ = -1;
+        lastMode_ = AimMode::None;
+        crosshairOverrideActive_.store(false, std::memory_order_release);
+        ArrowPathDetour::InvalidateCameraSnapshot();
+        MissileProjectileDetour::InvalidateReleaseCapture();
+        DiscardPendingFireEvents(false);
+        std::uint32_t version = 0;
+        RE::NiPoint3 from{}, to{};
+        float speed = 0;
+        if (ArrowPathDetour::GetLastFireEvent(version, from, to, speed)) lastArrowFireVersion_ = version;
+    }
+
+    void CrosshairManager::UpdateTrackedShot(ProjectileShot& shot, float dt)
+    {
+        if (shot.flight.Confirmed()) {
+            shot.flight.Advance(dt);
+            shot.elapsedGameTime = shot.flight.Elapsed() + shot.flight.SettleTime();
+            return;
+        }
+        MissileProjectileDetour::ImpactEvent impact;
+        if (MissileProjectileDetour::FindImpact(shot.projectile, shot.fireEventSec, impact)) {
+            shot.flight.Confirm(impact.position, impact.age - shot.launchAge);
+            shot.worldPolyline = shot.flight.Compose();
+            shot.travelTime = shot.elapsedGameTime = shot.flight.Elapsed();
+            return;
+        }
+        const auto reference = shot.projectile.get();
+        auto* projectile = reference ? reference->As<RE::Projectile>() : nullptr;
+        if (!projectile) { shot.flight.Lose(); return; }
+        const auto& data = projectile->GetProjectileRuntimeData();
+        if (data.flags.any(RE::Projectile::Flags::kDestroyed, RE::Projectile::Flags::kFading)) {
+            shot.flight.Lose(); return;
+        }
+        const auto position = projectile->GetPosition();
+        const float age = data.livingTime - shot.launchAge;
+        if (!SpellTrajectory::Finite(position) || !std::isfinite(age) || age < 0) { shot.flight.Lose(); return; }
+        shot.flight.Observe(position, age);
+        shot.elapsedGameTime = shot.flight.Elapsed();
+        // Reaching a prediction is not evidence of a hit. Keep the in-flight
+        // presentation alive even when the old target has moved out of the way.
+        shot.travelTime = (std::max)(shot.travelTime, shot.elapsedGameTime + .05f);
+        if (age < shot.nextTraceAt && shot.worldPolyline.size() >= 2) return;
+        auto velocity = data.linearVelocity;
+        if (SpellTrajectory::Length(velocity) < .001f) velocity = data.velocity;
+        const float remaining = shot.range - data.distanceMoved;
+        if (!SpellTrajectory::Finite(velocity) || !std::isfinite(remaining) || remaining <= 0) {
+            shot.flight.Lose(); return;
+        }
+        auto future = TraceSpellPath(projectile->GetParentCell(), position, velocity, shot.acceleration,
+            remaining, shot.integrationStep, shot.collisionFilter);
+        if (future.points.size() < 2) { shot.flight.Lose(); return; }
+        shot.worldPolyline = shot.flight.Compose(future);
+        shot.travelTime = shot.elapsedGameTime + (std::max)(future.duration, .05f);
+        shot.nextTraceAt = age + .05f;
     }
 
     void CrosshairManager::OnSmoothCamInterface(void* a_iface, std::uint8_t a_version)
@@ -569,19 +641,20 @@ namespace DietDrCamera
         {
             std::lock_guard<std::mutex> lock(firedShotsMutex_);
             for (auto& s : firedShots_) {
-                s.elapsedGameTime += gameDelta;
+                if (s.projectile) UpdateTrackedShot(s, gameDelta);
+                else s.elapsedGameTime += gameDelta;
             }
             firedShots_.erase(
                 std::remove_if(firedShots_.begin(), firedShots_.end(),
                     [&](const ProjectileShot& s) {
-                        return s.elapsedGameTime > (s.travelTime + kPostImpactSettle);
+                        return s.projectile ? s.flight.Expired() : s.elapsedGameTime > (s.travelTime + kPostImpactSettle);
                     }),
                 firedShots_.end());
         }
 
         // Bow / crossbow takes priority — same gate as before.
         auto* actorState = player->AsActorState();
-        if (actorState && actorState->IsWeaponDrawn()) {
+        if (actorState && actorState->IsWeaponDrawn() && ActiveTracingSettings().archeryEnabled) {
             auto* right = player->GetEquippedObject(false);
             if (right) {
                 if (auto* weap = right->As<RE::TESObjectWEAP>()) {
@@ -610,8 +683,8 @@ namespace DietDrCamera
         // until (fireTime + travelTime + kPostImpactSettle) elapses,
         // then they're pruned (above). Firing N spells in rapid
         // succession shows N simultaneous trails + cursors.
-        const bool wantSpell = SettingsManager::GetSingleton().spellTracingEnabled;
-        const bool wantArrow = SettingsManager::GetSingleton().archeryTracingEnabled;
+        const bool wantSpell = ActiveTracingSettings().spellEnabled;
+        const bool wantArrow = ActiveTracingSettings().archeryEnabled;
         if (!wantSpell && !wantArrow) {
             magicWasCharging_ = false;
             DiscardPendingFireEvents(false);
@@ -710,207 +783,34 @@ namespace DietDrCamera
                 const int srcEnum = ev.castingSource == 0 ? 1 : ev.castingSource == 1 ? 0 : ev.castingSource;
                 if (srcEnum >= 0) LearnReleaseAnchor(srcEnum, ev.startWorld);
                 if (tlLockedFire) continue;
-                bool dup = false;
+                if (!ev.projectile) continue;
+                bool duplicate = false;
                 {
-                    // Same-CAST dedup only. The 300ms window this used to
-                    // scan guarded against the spell eager push — removed
-                    // 2026-05-21 — so all it did lately was eat REAL shots:
-                    // same-hand spam casting fires ~150ms+ apart from nearly
-                    // the same spot ("shooting back to back extremely fast,
-                    // only 1 projectile is traced"), and alternating dual-
-                    // cast hands sit right at the 50u position borderline.
-                    // The one duplicate source left is a multi-projectile
-                    // spell publishing one event per projectile in the SAME
-                    // tick. Compare PUBLISH times, not consumption times:
-                    // two real casts drained in one Tick batch share a
-                    // consumption time (zero apparent gap — the "still
-                    // occasionally only 1" residue) but never a publish
-                    // time; same-cast projectiles share both.
-                    std::lock_guard<std::mutex> lock(firedShotsMutex_);
-                    for (auto it = firedShots_.rbegin(); it != firedShots_.rend(); ++it) {
-                        if (it->fireEventSec < -1.0e8) continue;   // non-spell producer
-                        if ((ev.fireSec - it->fireEventSec) > 0.05) break;
-                        if (it->worldPolyline.empty() || it->projectileFormID != ev.projectileFormID ||
-                            it->castingSource != srcEnum) continue;
-                        const auto& shotStart = it->worldPolyline.front();
-                        const float ddx = ev.startWorld.x - shotStart.x;
-                        const float ddy = ev.startWorld.y - shotStart.y;
-                        const float ddz = ev.startWorld.z - shotStart.z;
-                        if (ddx*ddx + ddy*ddy + ddz*ddz < 50.0f * 50.0f) {
-                            dup = true;
-                            break;
-                        }
-                    }
+                    std::scoped_lock lock(firedShotsMutex_);
+                    for (const auto& shot : firedShots_)
+                        if (shot.projectile == ev.projectile) { duplicate = true; break; }
                 }
-                if (!dup) {
-                    if (SpellTrajectory::Finite(ev.acceleration) && SpellTrajectory::Length(ev.acceleration) > 0.001f) {
-                        auto path = TraceSpellPath(player->GetParentCell(), ev.startWorld,
-                            ev.launchVelocity, ev.acceleration, ev.range, ev.integrationStep, ev.collisionFilter);
-                        if (path.points.size() < 2) continue;
-                        ProjectileShot shot;
-                        shot.worldPolyline = std::move(path.points);
-                        shot.travelTime = (std::max)(path.duration, 0.05f);
-                        shot.wallClockFireTime = nowSec;
-                        shot.fireEventSec = ev.fireSec;
-                        shot.projectileFormID = ev.projectileFormID;
-                        shot.castingSource = srcEnum;
-                        // The actual shot is authoritative immediately. Blending
-                        // from the charge pose draws a different, unchecked arc
-                        // during precisely the frames the missile is leaving.
-                        static unsigned traceLogCount = 0;
-                        if (traceLogCount++ < 8) {
-                            const auto& end = shot.worldPolyline.back();
-                            spdlog::info("[SpellTrace] projectile={:08X} source={} filter={:08X} "
-                                "origin=({:.3f},{:.3f},{:.3f}) velocity=({:.3f},{:.3f},{:.3f}) "
-                                "accelZ={:.3f} step={:.5f} duration={:.4f} hit={} points={} end=({:.3f},{:.3f},{:.3f})",
-                                ev.projectileFormID, srcEnum, ev.collisionFilter,
-                                ev.startWorld.x, ev.startWorld.y, ev.startWorld.z,
-                                ev.launchVelocity.x, ev.launchVelocity.y, ev.launchVelocity.z,
-                                ev.acceleration.z, ev.integrationStep, path.duration, path.hit,
-                                shot.worldPolyline.size(), end.x, end.y, end.z);
-                        }
-                        spdlog::debug("[SpellArc] fired projectile={:08X} speed={:.1f} accelerationZ={:.1f} travel={:.3f} hit={}",
-                            ev.projectileFormID, SpellTrajectory::Length(ev.launchVelocity),
-                            ev.acceleration.z, path.duration, path.hit);
-                        std::lock_guard<std::mutex> lock(firedShotsMutex_);
-                        firedShots_.push_back(std::move(shot));
-                        if (firedShots_.size() > 16) firedShots_.erase(firedShots_.begin());
-                        continue;
-                    }
-                    // Re-derive targetWorld via a hand-cast from spawn
-                    // when the detour's camera-cast target ended up at
-                    // or behind the spawn along camFwd (sneak self-hit
-                    // case). Use ev.fireCamFwd (the camera direction
-                    // CAPTURED AT FIRE TIME by the detour) — NOT a
-                    // fresh read here. Reading camFwd now would track
-                    // the user's spin between fire and consume and
-                    // fire a "corrective" hand-cast that ends up
-                    // pointing where the user is looking NOW, not
-                    // where the spell actually went. The trace must
-                    // align with the projectile's true direction.
-                    RE::NiPoint3 correctedTarget = ev.targetWorld;
-                    const RE::NiPoint3 fireCamFwd = ev.fireCamFwd;
-                    const float fireCamFwdLen2 =
-                        fireCamFwd.x*fireCamFwd.x +
-                        fireCamFwd.y*fireCamFwd.y +
-                        fireCamFwd.z*fireCamFwd.z;
-                    if (fireCamFwdLen2 > 0.5f) {
-                        const float fireFwdDist =
-                            (ev.targetWorld.x - ev.startWorld.x) * fireCamFwd.x +
-                            (ev.targetWorld.y - ev.startWorld.y) * fireCamFwd.y +
-                            (ev.targetWorld.z - ev.startWorld.z) * fireCamFwd.z;
-                        constexpr float kMinFwdDist = 500.0f;
-                        if (fireFwdDist < kMinFwdDist) {
-                            constexpr float kRayLen = 8000.0f;
-                            correctedTarget = RE::NiPoint3{
-                                ev.startWorld.x + fireCamFwd.x * kRayLen,
-                                ev.startWorld.y + fireCamFwd.y * kRayLen,
-                                ev.startWorld.z + fireCamFwd.z * kRayLen,
-                            };
-                            if (auto* cell = player->GetParentCell()) {
-                                if (auto* bhkW = cell->GetbhkWorld()) {
-                                    float frac = 1.0f;
-                                    if (AimRayCastSkipProjectiles(bhkW, ev.startWorld, correctedTarget, frac)) {
-                                        correctedTarget = RE::NiPoint3{
-                                            ev.startWorld.x + fireCamFwd.x * (kRayLen * frac),
-                                            ev.startWorld.y + fireCamFwd.y * (kRayLen * frac),
-                                            ev.startWorld.z + fireCamFwd.z * (kRayLen * frac),
-                                        };
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Handoff continuity: inherit the exact endpoint the
-                    // live preview last rendered for this hand instead of
-                    // using correctedTarget (a separate fire-time raycast
-                    // ~1 frame behind the preview). The preview is camera-
-                    // locked and re-anchors every render frame, so by the
-                    // release frame it sits one frame of rotation ahead of
-                    // the fire-time direction — switching to correctedTarget
-                    // snaps the trace back by that frame (the residual
-                    // flicker). Inheriting the preview endpoint makes the
-                    // seam exact. Falls back to correctedTarget if the
-                    // cache is stale/absent (e.g. instant cast with no
-                    // preview frames). The projectile launched along the
-                    // aim the preview showed, so this is also accurate.
-                    // Inherit the endpoint the live preview last drew so
-                    // the trace doesn't jump at release. Prefer the exact
-                    // casting hand; if the detour's hand-id disagrees with
-                    // the hand that was actually charging (the preview),
-                    // fall back to the freshest fresh cache entry and adopt
-                    // ITS hand as the shot's source — otherwise the trail's
-                    // near end would snap between hands at the handoff.
-                    RE::NiPoint3 traceEnd = correctedTarget;
-                    float inheritedCamDist   = -1.0f;
-                    bool  inheritedAnchorCam = false;
-                    int   inheritedSrc       = srcEnum;
-                    {
-                        std::lock_guard<std::mutex> lk(previewEndCacheMutex_);
-                        int best = -1;
-                        if (srcEnum >= 0 && srcEnum < 4) {
-                            const auto& pc = previewEndCache_[srcEnum];
-                            if (pc.valid && pc.projectileFormID == ev.projectileFormID &&
-                                (nowSec - pc.wallSec) < 0.15f) best = srcEnum;
-                        }
-                        if (best < 0) {
-                            for (int i = 0; i < 4; ++i) {
-                                const auto& pc = previewEndCache_[i];
-                                if (pc.valid && pc.projectileFormID == ev.projectileFormID &&
-                                    (nowSec - pc.wallSec) < 0.15f &&
-                                    (best < 0 || pc.wallSec > previewEndCache_[best].wallSec))
-                                    best = i;
-                            }
-                        }
-                        if (best >= 0) {
-                            const auto& pc = previewEndCache_[best];
-                            traceEnd           = pc.endpoint;
-                            inheritedCamDist   = pc.cachedDistance;
-                            inheritedAnchorCam = pc.anchorAtCamera;
-                            inheritedSrc       = best;
-                        }
-                    }
-
-                    ProjectileShot s;
-                    s.worldPolyline = { ev.startWorld, traceEnd };
-                    s.projectileFormID = ev.projectileFormID;
-                    const float dx = traceEnd.x - ev.startWorld.x;
-                    const float dy = traceEnd.y - ev.startWorld.y;
-                    const float dz = traceEnd.z - ev.startWorld.z;
-                    const float dist  = std::sqrt(dx*dx + dy*dy + dz*dz);
-                    const float speed = (std::max)(ev.projSpeed, 500.0f);
-                    s.travelTime        = std::clamp(dist / speed, 0.05f, 3.0f);
-                    s.wallClockFireTime = nowSec;
-                    s.fireEventSec      = ev.fireSec;
-                    s.elapsedGameTime   = 0.0f;
-                    s.cachedDistance    = dist;
-                    // Use the hand the preview actually charged on (see the
-                    // inherit fallback above), not the detour's possibly-
-                    // wrong nearest-node guess, so the blend resolves the
-                    // correct magic node for the trail's near end.
-                    s.castingSource     = inheritedSrc;
-                    // Handoff blend metadata (only when we inherited a
-                    // fresh preview endpoint). Lets the renderer reproduce
-                    // the preview's camera-locked line for the first few
-                    // frames, then ease to this world-locked one — no jump
-                    // at release, even while turning. See ProjectileShot.
-                    s.camAnchorDist     = inheritedCamDist;
-                    s.anchorAtCamera    = inheritedAnchorCam;
-                    spdlog::info(
-                        "[SpellFire] start=({:.1f},{:.1f},{:.1f}) "
-                        "origTarget=({:.1f},{:.1f},{:.1f}) "
-                        "corrTarget=({:.1f},{:.1f},{:.1f}) dist={:.0f} travel={:.2f}s",
-                        ev.startWorld.x, ev.startWorld.y, ev.startWorld.z,
-                        ev.targetWorld.x, ev.targetWorld.y, ev.targetWorld.z,
-                        correctedTarget.x, correctedTarget.y, correctedTarget.z,
-                        dist, s.travelTime);
-                    std::lock_guard<std::mutex> lock(firedShotsMutex_);
-                    firedShots_.push_back(std::move(s));
-                    if (firedShots_.size() > 16) {
-                        firedShots_.erase(firedShots_.begin());
-                    }
-                }
+                if (duplicate) continue;
+                // Every fired missile, including zero-gravity spells and staves,
+                // follows its native identity and velocity. A preview endpoint
+                // can never substitute for the projectile's actual launch.
+                ProjectileShot shot;
+                shot.projectile = ev.projectile;
+                shot.projectileFormID = ev.projectileFormID;
+                shot.wallClockFireTime = nowSec;
+                shot.fireEventSec = ev.fireSec;
+                shot.castingSource = srcEnum;
+                shot.acceleration = ev.acceleration;
+                shot.launchAge = ev.launchAge;
+                shot.range = ev.range > 0 ? (std::min)(ev.range, 8000.0f) : 8000.0f;
+                shot.integrationStep = ev.integrationStep;
+                shot.collisionFilter = ev.collisionFilter;
+                shot.flight.Observe(ev.startWorld, 0);
+                UpdateTrackedShot(shot, 0);
+                if (shot.flight.Expired()) continue;
+                std::scoped_lock lock(firedShotsMutex_);
+                firedShots_.push_back(std::move(shot));
+                if (firedShots_.size() > 16) firedShots_.erase(firedShots_.begin());
             }
         }
 
@@ -2285,6 +2185,15 @@ namespace DietDrCamera
     void CrosshairManager::Tick()
     {
         ++frameCounter_;
+        auto* currentCamera = RE::PlayerCamera::GetSingleton();
+        const int view = currentCamera && currentCamera->IsInFirstPerson() ? 1 : 0;
+        const auto tracing = ActiveTracingSettings();
+        const unsigned modes = (tracing.archeryEnabled ? 1u : 0u) | (tracing.spellEnabled ? 2u : 0u);
+        if (view != tracingView_ || modes != tracingModes_) {
+            ResetTracing();
+            tracingView_ = view;
+            tracingModes_ = modes;
+        }
         // Reset every frame; the bow path is the only one that re-arms
         // them. Any early-return path below leaves the overlay dark.
         showTrajectory_ = false;
@@ -2317,8 +2226,7 @@ namespace DietDrCamera
         // is gated on bow-draw state below and is a no-op for spell
         // casting anyway.
         {
-            const auto& sCfg = SettingsManager::GetSingleton();
-            const bool anyTracingOn = sCfg.archeryTracingEnabled || sCfg.spellTracingEnabled;
+            const bool anyTracingOn = ActiveTracingSettings().Enabled();
             if (!anyTracingOn) {
                 if (baselineCaptured_) {
                     RestoreCrosshair();
@@ -2356,7 +2264,7 @@ namespace DietDrCamera
             // Consume anything fired during the lock RIGHT NOW, while we
             // still know we are locked. This is the fix for traces appearing
             // after a lock-off kill — see DiscardPendingFireEvents.
-            DiscardPendingFireEvents(SettingsManager::GetSingleton().spellTracingEnabled);
+            DiscardPendingFireEvents(ActiveTracingSettings().spellEnabled);
             return;
         }
         // Falling edge of TDM lock — RestoreCrosshair wrote
@@ -2411,12 +2319,7 @@ namespace DietDrCamera
             stateId == RE::CameraState::kDragon      ||
             stateId == RE::CameraState::kFirstPerson;
         if (!eligibleState) {
-            if (baselineCaptured_) {
-                RestoreCrosshair();
-                RestoreStealthMeter();
-            }
-            crosshairOverrideActive_.store(false, std::memory_order_release);
-            ArrowPathDetour::InvalidateCameraSnapshot();
+            ResetTracing();
             return;
         }
 
@@ -2533,15 +2436,13 @@ namespace DietDrCamera
             // out of the trace's way). With both tracing toggles off, DDC
             // must hand the sneak eye back to the engine entirely — no
             // position writes, no alpha writes (user request 2026-08-15).
-            const auto& sTrace = SettingsManager::GetSingleton();
             const bool tracingOn =
-                sTrace.archeryTracingEnabled || sTrace.spellTracingEnabled;
+                ActiveTracingSettings().Enabled();
 
             const bool wantOffset = tracingOn && base_.stealthValid && isSneaking;
             if (wantOffset) {
-                const auto& s   = SettingsManager::GetSingleton();
-                const double dx = static_cast<double>(s.sneakMeterOffsetX);
-                const double dy = static_cast<double>(s.sneakMeterOffsetY);
+                const double dx = static_cast<double>(ActiveTracingSettings().sneakEyeX);
+                const double dy = static_cast<double>(ActiveTracingSettings().sneakEyeY);
                 const double targetSx = base_.stealthX + dx;
                 const double targetSy = base_.stealthY + dy;
                 WriteStealthMeterPosition(targetSx, targetSy);
@@ -2868,8 +2769,7 @@ namespace DietDrCamera
                                     pv.acceleration = SpellTrajectory::Acceleration<RE::NiPoint3>(data.gravity);
                                     pv.integrationStep = SpellTrajectory::IntegrationStep(RE::GetSecondsSinceLastFrame());
                                     pv.launchSpeed = data.speed * MissileProjectileDetour::GetSpeedMultiplier(pv.projectileFormID);
-                                    pv.ballistic = SpellTrajectory::Length(pv.acceleration) > 0.001f &&
-                                        std::isfinite(pv.launchSpeed) && pv.launchSpeed > 0.001f;
+                                    pv.ballistic = std::isfinite(pv.launchSpeed) && pv.launchSpeed > 0.001f;
                                     pv.parallelAim = usedHandCast || stateId == RE::CameraState::kFirstPerson;
                                     if (pv.ballistic) {
                                         const auto velocity = SpellTrajectory::Velocity(startPos, endPt, camFwd, pv.launchSpeed, pv.parallelAim);
@@ -2992,7 +2892,7 @@ namespace DietDrCamera
             // 200ms — defensive against any state-machine glitch that
             // could re-trigger the release edge (mode flips, animation
             // packs cycling attackState, etc.).
-            const bool wantArrowGate = SettingsManager::GetSingleton().archeryTracingEnabled;
+            const bool wantArrowGate = ActiveTracingSettings().archeryEnabled;
             if (justReleased && wantArrowGate &&
                 (nowSec - lastBowFireWallSec_) > 0.2f)
             {
@@ -3160,6 +3060,8 @@ namespace DietDrCamera
     {
         using namespace ImGuiMCP;
         if (smoothCamOwns_) return;
+        const auto tracing = ActiveTracingSettings();
+        if (!tracing.Enabled()) return;
 
         // TDM target lock takes over aim — Tick() already stops capturing
         // new shots and previews while locked, but in-flight shots
@@ -3237,7 +3139,7 @@ namespace DietDrCamera
         double cursorSx = 0.0, cursorSy = 0.0;
         {
             std::lock_guard<std::mutex> lock(trajectoryMutex_);
-            haveLiveTrail = showTrajectory_ && trajectoryHud_.size() >= 4;
+            haveLiveTrail = tracing.archeryEnabled && showTrajectory_ && trajectoryHud_.size() >= 4;
             if (haveLiveTrail) points = trajectoryHud_;
         }
         // Snapshot in-flight shots count + live spell previews count
@@ -3303,9 +3205,8 @@ namespace DietDrCamera
         auto* dl = ImGuiMCP::ImGui::GetForegroundDrawList();
         if (!dl) return;
 
-        const auto& sCfg = SettingsManager::GetSingleton();
-        const float reticleSizeScale = std::clamp(sCfg.projectileReticleSizeScale, 0.25f, 6.0f);
-        const float reticleThickness = std::clamp(sCfg.projectileReticleThickness, 0.5f, 12.0f);
+        const float reticleSizeScale = std::clamp(ActiveTracingSettings().reticleSize, 0.25f, 6.0f);
+        const float reticleThickness = std::clamp(ActiveTracingSettings().reticleThickness, 0.5f, 12.0f);
         // Trail lines draw heavier than the reticle strokes — the thin lines
         // read as faint scratch marks at gameplay distance. Scales with the
         // user's Thickness slider.
@@ -3379,32 +3280,12 @@ namespace DietDrCamera
             // the preview's camera-locked line to its frozen world line.
             constexpr float kHandoffBlend = 0.10f;
 
-            // Live camera for the handoff blend (reproduces the preview's
-            // camera-locked endpoint for the first kHandoffBlend seconds).
-            RE::NiPoint3 liveCamPosF{}, liveCamFwdF{};
-            bool haveLiveCamF = false;
-            {
-                RE::NiCamera* lc = nullptr;
-                if (ResolveCameraNi(lc) && lc) {
-                    const auto& m = lc->world.rotate;
-                    liveCamFwdF = RE::NiPoint3{ m.entry[0][0], m.entry[1][0], m.entry[2][0] };
-                    liveCamPosF = lc->world.translate;
-                    haveLiveCamF = true;
-                }
-            }
-
             for (const auto& shot : firedShotsCopy) {
+                if (shot.projectile ? !tracing.spellEnabled : !tracing.archeryEnabled) continue;
                 if (shot.worldPolyline.size() < 2) continue;
                 const float elapsed = shot.elapsedGameTime;
 
-                // Handoff blend: for the first kHandoffBlend seconds,
-                // ease the rendered polyline from the preview's CAMERA-
-                // LOCKED line (anchor + camFwd*camAnchorDist, live hand)
-                // to the frozen WORLD-LOCKED worldPolyline. At elapsed 0
-                // this reproduces the preview's last frame exactly (no
-                // position jump, even while turning); by kHandoffBlend
-                // it's fully world-locked on the true impact.
-                std::vector<RE::NiPoint3> renderPoly = shot.worldPolyline;
+                const auto& renderPoly = shot.worldPolyline;
 
                 // Reticle brightness eases from the preview's 0.85 to the
                 // in-flight 1.0 over the handoff window, for EVERY spell
@@ -3419,39 +3300,6 @@ namespace DietDrCamera
                     retAlphaMul = 0.85f + 0.15f * b;
                 }
 
-                if (shot.camAnchorDist >= 0.0f && haveLiveCamF &&
-                    shot.castingSource >= 0 && renderPoly.size() == 2 &&
-                    elapsed < kHandoffBlend)
-                {
-                    const float bRaw = std::clamp(elapsed / kHandoffBlend, 0.0f, 1.0f);
-                    const float b    = bRaw * bRaw * (3.0f - 2.0f * bRaw);
-                    RE::NiPoint3 liveHand = shot.worldPolyline.front();
-                    if (auto* livePly = RE::PlayerCharacter::GetSingleton()) {
-                        const auto src = static_cast<RE::MagicSystem::CastingSource>(shot.castingSource);
-                        if (auto* caster = livePly->GetMagicCaster(src)) {
-                            if (auto* node = caster->GetMagicNode())
-                                liveHand = node->world.translate;
-                        }
-                    }
-                    const RE::NiPoint3 anchor = shot.anchorAtCamera ? liveCamPosF : liveHand;
-                    const RE::NiPoint3 camLockedEnd{
-                        anchor.x + liveCamFwdF.x * shot.camAnchorDist,
-                        anchor.y + liveCamFwdF.y * shot.camAnchorDist,
-                        anchor.z + liveCamFwdF.z * shot.camAnchorDist,
-                    };
-                    const RE::NiPoint3 wStart = shot.worldPolyline.front();
-                    const RE::NiPoint3 wEnd   = shot.worldPolyline.back();
-                    renderPoly.front() = RE::NiPoint3{
-                        liveHand.x + (wStart.x - liveHand.x) * b,
-                        liveHand.y + (wStart.y - liveHand.y) * b,
-                        liveHand.z + (wStart.z - liveHand.z) * b,
-                    };
-                    renderPoly.back() = RE::NiPoint3{
-                        camLockedEnd.x + (wEnd.x - camLockedEnd.x) * b,
-                        camLockedEnd.y + (wEnd.y - camLockedEnd.y) * b,
-                        camLockedEnd.z + (wEnd.z - camLockedEnd.z) * b,
-                    };
-                }
                 const float fadeProgress = shot.travelTime > 0.001f
                     ? std::clamp(elapsed / shot.travelTime, 0.0f, 1.0f)
                     : 1.0f;
@@ -3561,6 +3409,9 @@ namespace DietDrCamera
         {
             std::lock_guard<std::mutex> lock(liveSpellPreviewsMutex_);
             previews = liveSpellPreviews_;
+            std::erase_if(previews, [&](const LiveSpellPreview& preview) {
+                return preview.castingSource >= 0 ? !tracing.spellEnabled : !tracing.archeryEnabled;
+            });
         }
         // Live-direction re-anchoring for straight previews only: rebuild the line
         // from the CURRENT camera forward + current hand position so
@@ -3648,18 +3499,6 @@ namespace DietDrCamera
                     };
                     pv.worldPolyline = { liveHand, liveEnd };
 
-                    // Publish this endpoint for the fired-shot handoff. The
-                    // shot (created in Tick) inherits the last value the
-                    // user actually saw, so the trace doesn't jump at
-                    // release. See PreviewEndpointCache.
-                    if (pv.castingSource >= 0 && pv.castingSource < 4) {
-                        const float nowSec = std::chrono::duration<float>(
-                            std::chrono::steady_clock::now().time_since_epoch()).count();
-                        std::lock_guard<std::mutex> lk(previewEndCacheMutex_);
-                        auto& cache = previewEndCache_[pv.castingSource];
-                        cache = {liveEnd, nowSec, true, pv.cachedDistance, pv.anchorAtCamera};
-                        cache.projectileFormID = pv.projectileFormID;
-                    }
                 }
             }
             constexpr int kMinSamples = 24;

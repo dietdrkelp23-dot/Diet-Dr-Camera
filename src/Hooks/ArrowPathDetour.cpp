@@ -1,7 +1,6 @@
 #include "PCH.h"
 #include "Hooks/ArrowPathDetour.h"
-#include "Camera/CameraNoiseController.h"
-#include "Camera/NpcArchery.h"
+#include "Settings/SettingsManager.h"
 
 #include <Windows.h>
 #include <atomic>
@@ -100,12 +99,6 @@ namespace
         // Player-only.
         auto handlePtr = runtime.shooter.get();
         if (!handlePtr || handlePtr.get() != ply) {
-            const bool firstTick = (runtime.flags.underlying() & 0x80000000u) == 0;
-            const bool archery = runtime.weaponSource && (runtime.weaponSource->IsBow() || runtime.weaponSource->IsCrossbow());
-            if (handlePtr && DietDrCamera::NpcNoise::IsNewNpcArcheryShot(firstTick, false, archery, runtime.ammoSource != nullptr))
-                DietDrCamera::CameraNoiseController::NotifyNpcArcheryShot(
-                    runtime.shooter, runtime.weaponSource->IsCrossbow(), runtime.weaponSource->GetFormID(),
-                    a_proj->GetFormID(), a_proj->GetPosition());
             _originalUpdateImpl(a_proj, a_delta);
             return;
         }
@@ -121,6 +114,10 @@ namespace
         // pass through unmodified — they were never the problem.
         auto* cam = RE::PlayerCamera::GetSingleton();
         if (!cam || !cam->currentState) {
+            _originalUpdateImpl(a_proj, a_delta);
+            return;
+        }
+        if (!DietDrCamera::SettingsManager::GetSingleton().GetProjectileTracing(cam->IsInFirstPerson()).archeryEnabled) {
             _originalUpdateImpl(a_proj, a_delta);
             return;
         }

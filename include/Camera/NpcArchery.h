@@ -8,11 +8,6 @@
 
 namespace DietDrCamera::NpcNoise
 {
-    inline bool IsNewNpcArcheryShot(bool firstTick, bool playerOwned, bool archeryWeapon, bool hasAmmo)
-    {
-        return firstTick && !playerOwned && archeryWeapon && hasAmmo;
-    }
-
     inline bool FreshArcheryShot(float age) { return age >= 0.0f && age < 0.5f; }
 
     // Projectile callbacks may run off the camera thread. Only value records

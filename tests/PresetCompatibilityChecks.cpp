@@ -4,6 +4,7 @@
 #include "Settings/SettingsManager.h"
 #include "Settings/PresetManager.h"
 #include "Settings/PresetTable.h"
+#include "UI/PresetSelection.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -548,7 +549,7 @@ void CheckNpcSpecificBindings(SettingsManager& s)
         }
         s.weaponBindings.push_back(std::move(binding));
     };
-    for (const auto category : {Category::Melee, Category::Bow, Category::Crossbow, Category::Shout}) {
+    for (const auto category : {Category::Melee, Category::Shout}) {
         s.ResetAllToVanilla();
         s.indoorMode = false;
         add(category, Scope::BaseItem, false);
@@ -559,10 +560,9 @@ void CheckNpcSpecificBindings(SettingsManager& s)
             if (category == Category::Melee)
                 return s.ResolveNpcMeleeNoise(slot == 5 || slot == 7 || slot == 9 || slot >= 10,
                     slot == 8 || slot == 9, slot == 6 || slot == 7, Weapon::Sword, slot >= 10 ? slot - 10 : -1, identity);
-            if (category == Category::Shout) return s.ResolveNpcShoutNoise("melee", "unrelenting_force", slot == 1, identity);
-            return s.ResolveNpcArcheryNoise(category == Category::Crossbow, slot == 5, true, identity);
+            return s.ResolveNpcShoutNoise("melee", "unrelenting_force", slot == 1, identity);
         };
-        const int slot = category == Category::Melee ? 3 : category == Category::Shout ? 0 : 2;
+        const int slot = category == Category::Melee ? 3 : 0;
         Require(resolve(item, slot) == &s.weaponBindings[2].noiseProfiles[slot], "Enchantment-specific NPC binding does not win");
         auto other = item; other.enchantment = "fire";
         Require(resolve(other, slot) == &s.weaponBindings[1].noiseProfiles[slot], "NPC exact-form binding does not beat base item");
@@ -579,8 +579,7 @@ void CheckNpcSpecificBindings(SettingsManager& s)
                         "NPC specific binding lost its saved amplitude");
             };
             if (category == Category::Melee) for (int useSlot : {3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}) check(useSlot);
-            else if (category == Category::Shout) { check(0); check(1); }
-            else { check(2); check(5); }
+            else { check(0); check(1); }
         };
         verify();
         RoundTrip(s);
@@ -729,17 +728,6 @@ void CheckNpcArcheryAndTransformations(SettingsManager& s)
             &s.locationOverrides[0].stateNoise.at("transformations.werewolf.attack"),
             "Transformation noise ignores the active location's explicit zero");
     s.activeLocationChain.clear(); s.locationOverrides.clear();
-    for (bool crossbow : {false, true}) {
-        const std::string base = crossbow ? "weapons.crossbow" : "weapons.bow";
-        auto& normal = s.stateNoise[base]; normal.enabled = true;
-        Require(s.ResolveNpcArcheryNoise(crossbow, false, false) == &normal, "Archery base fallback is wrong");
-        auto& drawing = s.stateNoise[base + ".draw"]; drawing.enabled = true;
-        auto& sneak = s.stateNoise[base + ".sneak.draw"]; sneak.enabled = true;
-        Require(s.ResolveNpcArcheryNoise(crossbow, false, false) == &drawing &&
-                s.ResolveNpcArcheryNoise(crossbow, true, false) == &sneak, "Bow/crossbow release loses its tuned entry");
-    }
-    auto& mounted = s.stateNoise["mounts.horseback.archery.draw"]; mounted.enabled = true;
-    Require(s.ResolveNpcArcheryNoise(false, true, true) == &mounted, "Mounted NPC archer uses on-foot settings");
     s.ResetAllToVanilla();
 }
 
@@ -836,7 +824,12 @@ void CheckStaffRitualProfiles(SettingsManager& s)
 }
 
 #include "HitShakePresetChecks.inc"
+#include "DamageReactionPresetChecks.inc"
+#include "CinematicViewsPresetChecks.inc"
+#include "LauncherPresetChecks.inc"
+#include "ProjectileTracingPresetChecks.inc"
 #include "MagicHitShakePresetChecks.inc"
+#include "TargetLockBiasPresetChecks.inc"
 
 int main(int argc, char** argv) try
 {
@@ -869,6 +862,9 @@ int main(int argc, char** argv) try
     const CameraProfile samples[] = { CameraProfile{}, CameraProfile::VanillaHorseback(),
         CameraProfile::WerewolfDefault(), { .sideOffset = 42, .height = 12, .zoom = 23, .fov = 92 },
         [] { CameraProfile p; p.transitionSetPitchBias = true; p.transitionPitchBias = -0.75f;
+            p.transitionSetHeightBias = true; p.transitionHeightBias = 0.5f;
+            p.transitionSetZoomBias = true; p.transitionZoomBias = -0.5f;
+            p.transitionSetFOVBias = true; p.transitionFOVBias = 1.0f;
             p.SyncTransitionOverride(); return p; }() };
     for (const auto& sample : samples) {
         s.ResetAllToVanilla();
@@ -911,6 +907,8 @@ int main(int argc, char** argv) try
     s.ResetAllToVanilla();
     Require(s.tlSheathed.transitionPitchBias == 0 && !s.tlSheathed.transitionSetPitchBias,
         "Pitch Bias did not reset to neutral");
+
+    CheckTargetLockBiasPresets(s);
 
     AuthorFixture(s);
     const auto authored = Snapshot(s);
@@ -972,8 +970,13 @@ int main(int argc, char** argv) try
     CheckNpcShouts(s);
     CheckNpcArcheryAndTransformations(s);
     CheckHitShakePresets(s);
+    CheckDamageReactionPresets(s);
+    CheckCinematicViewPresets(s);
+    CheckProjectileTracingPresets(s);
     CheckMagicHitShakePresets(s);
     CheckPresetFiles(s);
+    CheckLauncherPresetLifecycle(s);
+    CheckPresetReselectionWorkflow(s);
     std::cout << "Preset compatibility checks passed\n";
     return 0;
 } catch (const std::exception& error) {

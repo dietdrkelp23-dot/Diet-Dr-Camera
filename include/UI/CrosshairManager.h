@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <mutex>
 #include <vector>
+#include "Camera/ProjectileFlight.h"
 
 namespace RE
 {
@@ -40,6 +41,7 @@ namespace DietDrCamera
         void Init();
         void Tick();
         void Shutdown();
+        void ResetTracing();
 
         // Per-frame HUD overlay callback — registered once with the
         // SKSE Menu Framework's HudElement system. Renders the
@@ -165,64 +167,27 @@ namespace DietDrCamera
         // and reset smoothing.
         bool          stringWasTautLast_  = false;
 
-        // Magic-mode state. magicWasActiveLast_ is the edge detector
-        // (caster firing hostile FoF missile last frame). When the
-        // edge fires (active → inactive), magicHoldUntil_ is set to
-        // (now + kMagicHoldSeconds) so the reticle stays pinned at
-        // the predicted impact point for that window — the spell is
-        // in flight then, and snapping the cursor back to vanilla
-        // mid-flight reads as the system giving up on the prediction.
-        // frozenMagic*_ captures the screen-space target + polyline
-        // at the cast-end edge so the hold window renders a static
-        // image (no jitter as the camera continues to move).
-        // One entry per in-flight spell projectile. The
-        // MissileProjectileDetour publishes a fire event at the exact
-        // moment the engine spawns a player hostile-missile projectile;
-        // DetectAimMode polls this version each frame and on change
-        // appends a new MagicShot. Each shot's line + cursor renders
-        // independently with its own fade timeline, so firing N spells
-        // in rapid succession shows N concurrent trails and cursors,
-        // each anchored to the world point it was fired from.
-        // A projectile shot's full trajectory in world coordinates,
-        // captured at fire time. Zero-gravity spells use a 2-point line;
-        // gravity-affected missiles and arrows store sampled curves. Re-projecting
-        // each point each frame keeps the trail anchored to the world
-        // — player movement / camera rotation don't shift it.
+        // Arrows retain their sampled release path. Spell/staff shots retain
+        // a weak native identity, observed flight history and a refreshed path
+        // ahead. Predicted arrival cannot start an impact/settling animation.
         struct ProjectileShot
         {
             std::vector<RE::NiPoint3> worldPolyline;
-            float                     wallClockFireTime = 0.0f;
-            float                     travelTime        = 0.0f;
-            float                     elapsedGameTime   = 0.0f;
-            // The detour's PUBLISH-time stamp (steady seconds) for spell
-            // shots; -1e9 for shots from other producers (arrows). The
-            // same-cast dedup compares EVENT times against this — two real
-            // casts drained in one Tick batch share a consumption time but
-            // never a publish time.
-            double                    fireEventSec = -1.0e9;
-            // Per-render re-anchoring data. When cachedDistance > 0
-            // AND castingSource >= 0, the trail's polyline is rebuilt
-            // each render from the CURRENT camera forward + current
-            // hand position so it tracks the live aim direction instead
-            // of staying frozen at the fire-time direction (which gets
-            // "outpaced" visibly when the user continues spinning).
-            // -1 / -1 = use stored polyline (arrow path).
-            float                     cachedDistance    = -1.0f;
-            int                       castingSource     = -1;
-            // Handoff blend (spells only). When >= 0, for the first
-            // kHandoffBlend seconds of flight the renderer eases the
-            // trace from a CAMERA-LOCKED line (identical to the live
-            // preview's formula: anchor + camFwd*camAnchorDist) to the
-            // frozen WORLD-LOCKED worldPolyline. At elapsed 0 the shot
-            // therefore renders byte-for-byte like the preview's last
-            // frame (no jump, even while turning); by kHandoffBlend it's
-            // fully world-locked on the true impact. anchorAtCamera mirrors
-            // the preview's anchor mode. -1 ⇒ no blend (arrows).
-            float                     camAnchorDist     = -1.0f;
-            bool                      anchorAtCamera    = false;
-            std::uint32_t             projectileFormID{};
+            float wallClockFireTime = 0, travelTime = 0, elapsedGameTime = 0;
+            double fireEventSec = -1.0e9;
+            int castingSource = -1;
+            std::uint32_t projectileFormID = 0;
+            RE::ObjectRefHandle projectile;
+            ProjectileFlight::Flight<RE::NiPoint3> flight;
+            RE::NiPoint3 acceleration{};
+            float launchAge = 0, range = 8000, nextTraceAt = 0;
+            float integrationStep = 1.0f/60.0f;
+            std::uint32_t collisionFilter = 0;
         };
         std::vector<ProjectileShot> firedShots_;
+        void UpdateTrackedShot(ProjectileShot& shot, float dt);
+        int tracingView_ = -1;
+        unsigned tracingModes_ = 0;
         mutable std::mutex          firedShotsMutex_;
         std::uint32_t               lastSpellFireVersion_ = 0;
         std::uint32_t               lastArrowFireVersion_ = 0;
@@ -287,32 +252,6 @@ namespace DietDrCamera
         };
         std::vector<LiveSpellPreview> liveSpellPreviews_;
         mutable std::mutex            liveSpellPreviewsMutex_;
-
-        // Handoff continuity cache (one per casting source, 0..3). The
-        // HUD render thread stores the LAST re-anchored preview endpoint
-        // (the exact world point the user saw the trace pointing at) here
-        // each frame. When a fired shot is created, it inherits this
-        // endpoint instead of recomputing from a separate fire-time
-        // raycast — so the trace doesn't jump by one frame's worth of
-        // camera rotation at release (the residual flicker). The fired
-        // projectile launched along the same aim the preview showed, so
-        // inheriting the preview endpoint is also the most accurate
-        // representation of where it went. Stale entries (>150ms) are
-        // ignored so an old cast can't anchor a new shot.
-        struct PreviewEndpointCache
-        {
-            RE::NiPoint3 endpoint{ 0.0f, 0.0f, 0.0f };
-            float        wallSec        = -1000.0f;
-            bool         valid          = false;
-            // Anchor data so the fired shot can reproduce the preview's
-            // camera-locked line for the handoff blend (see ProjectileShot
-            // camAnchorDist).
-            float        cachedDistance = -1.0f;
-            bool         anchorAtCamera = false;
-            std::uint32_t projectileFormID{};
-        };
-        PreviewEndpointCache previewEndCache_[4]{};
-        mutable std::mutex   previewEndCacheMutex_;
 
         // Per-source dual-hand debounce. When a caster transiently
         // drops out of the charging-state set (state machine cycles),

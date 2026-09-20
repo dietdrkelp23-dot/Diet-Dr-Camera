@@ -75,7 +75,9 @@ try {
     # Snapshot the working source, including new files, using an explicit allowlist.
     $roots = @('src', 'include', 'cmake', 'tests', 'tools', 'dist', 'licenses', 'nexus', 'extern/CommonLibSSE-NG', 'extern/minhook')
     $docs = @('CMakeLists.txt', 'vcpkg.json', 'README.md', 'BUILDING.md', 'RUNTIME-TESTING.md', 'SOURCE-PROVENANCE.md', 'LICENSE.txt', 'LICENSING.md', 'EXCEPTIONS.md', 'PRESET-COMPAT.md', 'PRESET-AUTHORS.md', 'RELEASE-NOTES.md', 'RUNTIME-SUPPORT.md',
-              'RELEASE-CHECKLIST.md', 'REQUIREMENTS.txt', 'CREDITS.txt', 'THIRD-PARTY-NOTICES.txt',
+              'RELEASE-CHECKLIST.md', 'RUNTIME-MATRIX.md', 'RUNTIME-COMPATIBILITY-AUDIT.md',
+              'SUPPORT-LOGGING.md', 'DAMAGE-REACTION-COVERAGE.md', 'CINEMATIC-VIEWS.md',
+              'REQUIREMENTS.txt', 'CREDITS.txt', 'THIRD-PARTY-NOTICES.txt',
               'Diet Dr Camera - Requirements and Credits.txt')
     $hasGit = (Test-Path -LiteralPath (Join-Path $repo '.git')) -and ($null -ne (Get-Command git -ErrorAction SilentlyContinue))
     $hasVendorGit = $hasGit -and (Test-Path -LiteralPath (Join-Path $repo 'extern/CommonLibSSE-NG/.git'))

@@ -3,10 +3,12 @@
 #include "Hooks/RuntimeHooks.h"
 #include <Windows.h>
 #include <fstream>
+#include "RuntimeImageScenario.h"
 
 // Optional offline verification against a locally supplied, unpacked executable.
 // No engine instructions, entry point, imports or game initialization are executed.
-inline void CheckRuntimeImage(const std::filesystem::path& executable, const std::filesystem::path& library)
+inline void CheckRuntimeImage(const std::filesystem::path& executable, const std::filesystem::path& library,
+    std::string_view scenario = "clean")
 {
     std::ifstream stream(executable, std::ios::binary);
     std::vector<char> file{std::istreambuf_iterator<char>{stream}, {}};
@@ -53,8 +55,72 @@ inline void CheckRuntimeImage(const std::filesystem::path& executable, const std
     const auto version=*detectedVersion;
     require(REL::Module::mock(version,REL::Module::Runtime::Unknown,L"SkyrimSE.exe",reinterpret_cast<std::uintptr_t>(image)));
     require(REL::IDDB::inject(library.wstring(),version));
-    DietDrCamera::RuntimeHooks::Prepare();
+    RuntimeImageScenario mutation(image, imageSize, version, scenario);
+    if (!mutation.Prepare()) return;
     const auto& sites=DietDrCamera::RuntimeHooks::Get();
     require(sites.mainUpdate!=0 && sites.dialogueTimer!=0 && sites.cameraUpdate!=0 && sites.enterFurniture!=0);
+    // Check the native targets of every vtable slot DDC installs, including
+    // conditional dragon hooks. This validates addresses, not C++ signatures
+    // or gameplay behavior. No target is ever invoked.
+    std::size_t checkedSlots = 0;
+    const auto checkSlot = [&](std::string_view name, auto id, std::size_t slot) {
+        const REL::Relocation<std::uintptr_t> table{id};
+        const auto tableRva = table.address() - reinterpret_cast<std::uintptr_t>(image);
+        require(tableRva < imageSize && (slot + 1) * sizeof(std::uintptr_t) <= imageSize - tableRva);
+        std::uintptr_t target{};
+        std::memcpy(&target, image + tableRva + slot * sizeof(target), sizeof(target));
+        require(target >= nt.OptionalHeader.ImageBase && target - nt.OptionalHeader.ImageBase < imageSize);
+        const auto rva = target - nt.OptionalHeader.ImageBase;
+        bool executableTarget = false;
+        for (std::size_t i = 0; i < nt.FileHeader.NumberOfSections; ++i) {
+            const auto section = read.operator()<IMAGE_SECTION_HEADER>(sections + i * sizeof(IMAGE_SECTION_HEADER));
+            if ((section.Characteristics & IMAGE_SCN_MEM_EXECUTE) && rva >= section.VirtualAddress &&
+                rva - section.VirtualAddress < section.Misc.VirtualSize) executableTarget = true;
+        }
+        if (!executableTarget) throw std::runtime_error(std::string(name) + " slot " +
+            std::to_string(slot) + " does not target executable image code");
+        ++checkedSlots;
+    };
+#define CHECK_SLOT(Type, table, slot) checkSlot(#Type, RE::VTABLE_##Type[table], slot)
+    CHECK_SLOT(ValueModifierEffect, 0, 0x20);
+    CHECK_SLOT(DualValueModifierEffect, 0, 0x20);
+    CHECK_SLOT(PeakValueModifierEffect, 0, 0x20);
+    CHECK_SLOT(AbsorbEffect, 0, 0x20);
+    CHECK_SLOT(AccumulatingValueModifierEffect, 0, 0x20);
+    CHECK_SLOT(TargetValueModifierEffect, 0, 0x20);
+    CHECK_SLOT(ValueAndConditionsEffect, 0, 0x20);
+    for (const auto slot : {0x3, 0x4, 0x5, 0xB, 0xE}) {
+        CHECK_SLOT(ThirdPersonState, 0, slot);
+        CHECK_SLOT(HorseCameraState, 0, slot);
+    }
+    for (const auto slot : {0x3, 0x4}) CHECK_SLOT(DragonCameraState, 0, slot);
+    for (const auto slot : {0x1, 0x2, 0x3}) CHECK_SLOT(BleedoutCameraState, 0, slot);
+    CHECK_SLOT(TweenMenuCameraState, 0, 0x3);
+    CHECK_SLOT(FirstPersonState, 0, 0x3);
+    CHECK_SLOT(PlayerCameraTransitionState, 0, 0x3);
+    CHECK_SLOT(MenuControls, 0, 0x1);
+    CHECK_SLOT(NiCamera, 0, 0x30);
+    CHECK_SLOT(DialogueMenu, 0, 0x5);
+    CHECK_SLOT(ThirdPersonState, 1, DietDrCamera::RuntimeHooks::InputSlot(4));
+    CHECK_SLOT(HorseCameraState, 1, DietDrCamera::RuntimeHooks::InputSlot(4));
+    CHECK_SLOT(TogglePOVHandler, 0, DietDrCamera::RuntimeHooks::InputSlot(4));
+    CHECK_SLOT(TogglePOVHandler, 0, DietDrCamera::RuntimeHooks::InputSlot(5));
+    CHECK_SLOT(ActivateHandler, 0, 1);
+    CHECK_SLOT(AttackBlockHandler, 0, 1);
+    CHECK_SLOT(AutoMoveHandler, 0, 1);
+    CHECK_SLOT(JumpHandler, 0, 1);
+    CHECK_SLOT(LookHandler, 0, 1);
+    CHECK_SLOT(MovementHandler, 0, 1);
+    CHECK_SLOT(ReadyWeaponHandler, 0, 1);
+    CHECK_SLOT(RunHandler, 0, 1);
+    CHECK_SLOT(ShoutHandler, 0, 1);
+    CHECK_SLOT(SneakHandler, 0, 1);
+    CHECK_SLOT(SprintHandler, 0, 1);
+    CHECK_SLOT(TogglePOVHandler, 0, 1);
+    CHECK_SLOT(ToggleRunHandler, 0, 1);
+    CHECK_SLOT(FavoritesHandler, 0, 1);
+    CHECK_SLOT(MenuOpenHandler, 0, 1);
+#undef CHECK_SLOT
+    std::cout << checkedSlots << " hooked vtable targets passed executable-image validation\n";
     std::cout << "Complete hook preflight passed against mapped Skyrim " << version.string() << "; no game code executed\n";
 }

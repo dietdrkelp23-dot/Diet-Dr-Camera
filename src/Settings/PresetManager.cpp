@@ -2,6 +2,7 @@
 #include "Settings/PresetManager.h"
 #include "Core/AtomicFile.h"
 #include "Settings/SettingsManager.h"
+#include "Settings/CinematicViewSettings.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -63,6 +64,13 @@ namespace DietDrCamera
     {
         const auto utf8 = path.u8string();
         return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+    }
+
+    static bool CanApplyPreset(const toml::table& table)
+    {
+        std::vector<CinematicViews::View> views;
+        return CanReadPreset(table) && CinematicViews::ReadViews(table["cinematic_views"],views,
+            [](const toml::table&, CameraProfile&) {}); // Validate shape/identity before resetting current settings.
     }
 
     // Hotkeys are global keybinds, untied to any preset (quick tune, preset
@@ -165,6 +173,7 @@ namespace DietDrCamera
         }
         spdlog::info("PresetManager: saved preset '{}'", sanitized);
         s.activePresetName = sanitized;
+        s.Save();
         return true;
     }
     catch (const std::exception& error) {
@@ -195,7 +204,7 @@ namespace DietDrCamera
         // sets them once and they must persist across every preset load
         // (otherwise they'd re-bind on every preset). Preserve all of them
         // across the reset + apply below.
-        if (!CanReadPreset(tbl)) {
+        if (!CanApplyPreset(tbl)) {
             _lastError = "Preset is invalid or needs a newer Diet Dr Camera. Current settings were kept.";
             spdlog::warn("PresetManager: '{}': {}", name, _lastError);
             return false;
@@ -221,6 +230,10 @@ namespace DietDrCamera
         if (!applied) return false;
         _lastError.clear();
         s.activePresetName = name;
+        // Persist the selection at the operation, not a native menu-close
+        // event. Launchers such as Risa toggle the SMF window directly, and
+        // preset hotkeys do not open the Journal either.
+        s.Save();
         spdlog::info("PresetManager: loaded preset '{}'", name);
         return true;
     }
@@ -246,6 +259,7 @@ namespace DietDrCamera
         auto& s = SettingsManager::GetSingleton();
         if (s.activePresetName == name || s.activePresetName == SanitizeName(name)) {
             s.activePresetName.clear();
+            s.Save();
         }
         return true;
     }
@@ -281,6 +295,7 @@ namespace DietDrCamera
         auto& s = SettingsManager::GetSingleton();
         if (s.activePresetName == oldName || s.activePresetName == SanitizeName(oldName)) {
             s.activePresetName = newDisplay;
+            s.Save();
         }
         return true;
     }
@@ -346,7 +361,7 @@ namespace DietDrCamera
         try {
             const auto path = PresetPath(name);
             const auto previous = toml::parse_file(PathUtf8(path));
-            if (!CanReadPreset(previous)) {
+            if (!CanApplyPreset(previous)) {
                 _lastError = "Preset is invalid or needs a newer Diet Dr Camera. The file was kept.";
                 spdlog::warn("PresetManager: '{}': {}", name, _lastError);
                 return false;
@@ -366,6 +381,7 @@ namespace DietDrCamera
             }
             ++g_presetListGeneration;
             settings.activePresetName = name;
+            settings.Save();
             _lastError.clear();
             spdlog::info("PresetManager: updated preset '{}'", name);
             return true;

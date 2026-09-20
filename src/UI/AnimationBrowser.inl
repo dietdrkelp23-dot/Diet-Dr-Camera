@@ -1,5 +1,5 @@
 // Included inside MenuUI's namespace: use the menu's existing pad widgets.
-struct AnimationLibraryLayout { float top, height; };
+struct AnimationLibraryLayout { float top, buttonTop; };
 
 static bool AnimationRowNearViewport()
 {
@@ -69,11 +69,10 @@ static AnimationLibraryLayout RenderAnimationLibrary(SettingsManager& settings,
     struct Browser
     {
         AnimationCatalog catalog;
-        std::size_t revision = 0;
+        std::size_t revision = 0, availableCount = 0;
         char search[160]{};
         std::vector<Mod> mods;
-        std::set<std::string> openMods, openSubmods;
-        CatalogAnimation selected;
+        std::set<std::string> openMods, openSubmods, boundPaths;
         bool dirty = true, recent = false;
     };
     static Browser browser;
@@ -82,9 +81,15 @@ static AnimationLibraryLayout RenderAnimationLibrary(SettingsManager& settings,
     if (browser.revision != browser.catalog.Revision()) {
         browser.revision = browser.catalog.Revision();
         browser.dirty = true;
-        if (!browser.recent && !browser.selected.key.empty() &&
-            std::none_of(browser.catalog.Result().animations.begin(), browser.catalog.Result().animations.end(),
-                [&](const auto& a) { return a.key == browser.selected.key; })) browser.selected = {};
+    }
+    // Compare paths, not just the entry count: switching presets can replace
+    // bindings without changing their number. Removed bindings reappear too.
+    std::set<std::string> boundPaths;
+    for (const auto& entry : settings.animationCameras)
+        boundPaths.insert(AnimationPathKey(entry.animationPath));
+    if (browser.boundPaths != boundPaths) {
+        browser.boundPaths = std::move(boundPaths);
+        browser.dirty = true;
     }
     const auto& catalog = browser.catalog.Result();
     ImGui::TextUnformatted("Player Animation Library");
@@ -93,23 +98,13 @@ static AnimationLibraryLayout RenderAnimationLibrary(SettingsManager& settings,
         browser.dirty = true;
         browser.openMods.clear(); browser.openSubmods.clear();
     }
-    if (PadButton(browser.recent ? "Browse##anim_library" : "Recent##anim_library"))
-        browser.recent = !browser.recent;
-    if (browser.recent) {
-        bool armed = controller.CaptureArmed();
-        if (PadCheckbox("Record recent animations", &armed)) controller.SetCaptureArmed(armed);
-    } else {
-        ImGui::SameLine();
-        if (browser.catalog.Busy()) ImGui::TextUnformatted("Scanning...");
-        else ImGui::Text("%zu files", catalog.animations.size());
-    }
-    if (!catalog.error.empty()) ImGui::TextWrapped("%s", catalog.error.c_str());
-    if (catalog.skipped) ImGui::TextWrapped("Some files or metadata could not be read (%zu).", catalog.skipped);
-
     if (browser.dirty) {
         browser.mods.clear();
+        browser.availableCount = 0;
         for (std::size_t i = 0; i < catalog.animations.size(); ++i) {
             const auto& animation = catalog.animations[i];
+            if (browser.boundPaths.contains(animation.key)) continue;
+            ++browser.availableCount;
             if (!AnimationSearchMatches(animation.search, browser.search)) continue;
             // Catalog order is mod name/key, submod name/key, then filename.
             if (browser.mods.empty() || browser.mods.back().key != animation.modKey)
@@ -126,17 +121,57 @@ static AnimationLibraryLayout RenderAnimationLibrary(SettingsManager& settings,
         }
         browser.dirty = false;
     }
+    if (PadButton(browser.recent ? "Browse##anim_library" : "Recent##anim_library"))
+        browser.recent = !browser.recent;
+    if (browser.recent) {
+        bool armed = controller.CaptureArmed();
+        if (PadCheckbox("Record recent animations", &armed)) controller.SetCaptureArmed(armed);
+    } else {
+        ImGui::SameLine();
+        if (browser.catalog.Busy()) ImGui::TextUnformatted("Scanning...");
+        else ImGui::Text("%zu available", browser.availableCount);
+    }
+    if (!catalog.error.empty()) ImGui::TextWrapped("%s", catalog.error.c_str());
+    if (catalog.skipped) ImGui::TextWrapped("Some files or metadata could not be read (%zu).", catalog.skipped);
+
     const float top = ImGui::GetCursorPosY();
-    const float height = std::max(Sx(180.0f), bottom - top - Sx(185.0f));
+    // The library fills the pane; only the bound column needs a Remove row.
+    const float spacing = ImGui::GetStyle()->ItemSpacing.y;
+    const float buttonTop = std::max(top + 4.0f + spacing, bottom - ImGui::GetFrameHeight());
+    const float height = buttonTop + ImGui::GetFrameHeight() - top;
     const auto drawFile = [&](const CatalogAnimation& animation) {
         ImGui::PushID(animation.key.c_str());
+        const bool replacement = animation.key.find("animationreplacer\\") != std::string::npos;
+        const bool canBind = !animation.key.empty() && !animation.firstPerson && (!replacement || controller.OarAvailable());
+        if (!canBind) PadBeginDisabled();
         ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
-        bool selected = ImGui::Selectable(animation.filename.c_str(), browser.selected.key == animation.key);
+        bool selected = ImGui::Selectable(animation.filename.c_str(), false);
         ImGui::PopItemFlag();
         if (AnimationRowNearViewport() && PadHandleItem(PadRegisterItem(), false)) selected = true;
-        if (selected) { browser.selected = animation; PadPressFlash(); }
-        if (ImGui::IsItemHovered(0)) ImGui::SetTooltip("%s / %s\n%s",
-            animation.mod.c_str(), animation.submod.c_str(), animation.key.c_str());
+        if (selected && canBind) {
+            const auto existing = std::find_if(settings.animationCameras.begin(), settings.animationCameras.end(),
+                [&](const auto& entry) { return AnimationPathKey(entry.animationPath) == animation.key; });
+            if (existing != settings.animationCameras.end()) selectedBinding = existing->uid;
+            else {
+                SettingsManager::AnimationCameraEntry entry;
+                entry.name = animation.submod.empty() ? animation.filename : animation.submod + ": " + animation.filename;
+                entry.animationPath = animation.key; entry.modName = animation.mod; entry.subModName = animation.submod;
+                settings.animationCameras.push_back(std::move(entry));
+                settings.AssignAnimationCameraUids();
+                selectedBinding = settings.animationCameras.back().uid;
+                controller.RebuildMatchIndex();
+            }
+            PadPressFlash();
+        }
+        if (!canBind) PadEndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (animation.firstPerson)
+                ImGui::SetTooltip("This file animates first-person arms. These camera entries follow the player's body animations.");
+            else if (replacement && !controller.OarAvailable())
+                ImGui::SetTooltip("Open Animation Replacer is required to bind this replacement animation.");
+            else ImGui::SetTooltip("%s / %s\n%s",
+                animation.mod.c_str(), animation.submod.c_str(), animation.key.c_str());
+        }
         ImGui::PopID();
     };
     if (PadNavBeginChild("##anim_library_rows", ImVec2(0, height),
@@ -144,6 +179,7 @@ static AnimationLibraryLayout RenderAnimationLibrary(SettingsManager& settings,
         if (browser.recent) {
             bool any = false;
             for (const auto& clip : controller.GetCapturedClips()) {
+                if (browser.boundPaths.contains(clip.key)) continue;
                 CatalogAnimation row;
                 row.key = clip.key; row.filename = clip.display; row.mod = clip.mod; row.submod = clip.subMod;
                 row.search = clip.key + " " + clip.display + " " + clip.mod + " " + clip.subMod;
@@ -151,10 +187,11 @@ static AnimationLibraryLayout RenderAnimationLibrary(SettingsManager& settings,
                 if (!AnimationSearchMatches(row.search, browser.search)) continue;
                 drawFile(row); any = true;
             }
-            if (!any) ImGui::TextWrapped("No matching recent animations. Recording is optional; Browse lists installed player animations.");
+            if (!any) ImGui::TextWrapped("No matching unbound recent animations. Recording is optional; Browse lists installed player animations.");
         } else {
             if (browser.mods.empty()) ImGui::TextWrapped(browser.catalog.Busy() ? "Reading installed player animations..." :
-                browser.search[0] ? "No player animations match this search." : "No OAR or DAR player animations found.");
+                browser.search[0] ? "No unbound player animations match this search." :
+                catalog.animations.empty() ? "No OAR or DAR player animations found." : "All player animations are already bound.");
             for (const auto& mod : browser.mods) {
                 ImGui::PushID(mod.key.c_str());
                 const auto label = mod.name + " (" + std::to_string(mod.count) + ")###mod";
@@ -194,27 +231,5 @@ static AnimationLibraryLayout RenderAnimationLibrary(SettingsManager& settings,
     }
     PadNavEndChild();
 
-    const auto& picked = browser.selected;
-    std::uint32_t existing = 0;
-    for (const auto& entry : settings.animationCameras)
-        if (AnimationPathKey(entry.animationPath) == picked.key) { existing = entry.uid; break; }
-    const bool replacement = picked.key.find("animationreplacer\\") != std::string::npos;
-    const bool canBind = !picked.key.empty() && !picked.firstPerson && (!replacement || controller.OarAvailable());
-    if (picked.firstPerson) ImGui::TextWrapped("This file animates first-person arms. These camera entries follow the player's body animations.");
-    else if (!picked.key.empty()) ImGui::TextWrapped("Selected: %s", picked.filename.c_str());
-    if (!canBind) PadBeginDisabled();
-    if (PadButton(existing ? "Select Bound Animation##anim_bind" : "Bind Animation##anim_bind", ImVec2(-1, 0)) && canBind) {
-        if (existing) selectedBinding = existing;
-        else {
-            SettingsManager::AnimationCameraEntry entry;
-            entry.name = picked.submod.empty() ? picked.filename : picked.submod + ": " + picked.filename;
-            entry.animationPath = picked.key; entry.modName = picked.mod; entry.subModName = picked.submod;
-            settings.animationCameras.push_back(std::move(entry));
-            settings.AssignAnimationCameraUids();
-            selectedBinding = settings.animationCameras.back().uid;
-            controller.RebuildMatchIndex();
-        }
-    }
-    if (!canBind) PadEndDisabled();
-    return {top, height};
+    return {top, buttonTop};
 }

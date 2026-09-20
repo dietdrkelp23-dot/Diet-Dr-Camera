@@ -96,8 +96,14 @@ namespace DietDrCamera
         bool  transitionSetAimBias   = false;
         float transitionAimBias      = 1.0f;
 
-        // Target Lock only. Signed proximity pitch; no global counterpart.
+        // Target Lock only. Signed proximity framing; no global counterparts.
         // An enabled enemy value replaces the entry's, including explicit zero.
+        bool  transitionSetHeightBias = false;
+        float transitionHeightBias    = 0.0f;
+        bool  transitionSetZoomBias = false;
+        float transitionZoomBias    = 0.0f;
+        bool  transitionSetFOVBias = false;
+        float transitionFOVBias    = 0.0f;
         bool  transitionSetPitchBias = false;
         float transitionPitchBias    = 0.0f;
 
@@ -117,15 +123,20 @@ namespace DietDrCamera
             return transitionSetRotation || transitionSetPitch ||
                    transitionSetPosition || transitionSetZoom ||
                    transitionSetFOV || transitionSetLooseness ||
-                   transitionSetWeight || transitionSetAimBias || transitionSetPitchBias;
+                   transitionSetWeight || transitionSetAimBias || ProximityBiasAnySet();
         }
-        // Re-derive the master from the seven. Call after touching any of
+        [[nodiscard]] constexpr bool ProximityBiasAnySet() const
+        {
+            return transitionSetHeightBias || transitionSetZoomBias ||
+                   transitionSetFOVBias || transitionSetPitchBias;
+        }
+        // Re-derive the master from all flags. Call after touching any of
         // them; every runtime gate still reads transitionOverride.
         constexpr void SyncTransitionOverride() { transitionOverride = TransitionAnySet(); }
         // Sets or clears the seven speed flags together. The "Override All"
         // checkbox that used to drive it was removed 2026-09-07; the popup's
         // Reset All and the loader are what call it now.
-        // NOTE: Aim Bias is deliberately NOT part of this. "Override All" is
+        // NOTE: Aim and proximity biases are deliberately NOT part of this. "Override All" is
         // about how the camera MOVES; arming lock-on centring as a side effect
         // of a convenience button would change where the camera POINTS. Aim
         // Bias arms from its own row only.

@@ -9,6 +9,10 @@ and [release notes](RELEASE-NOTES.md). One CommonLibSSE-NG DLL targets the known
 SE and AE releases, including Steam/GOG 1.6 and Steam 1.7. See
 [RUNTIME-SUPPORT.md](RUNTIME-SUPPORT.md) for the version list and validation status.
 See [PRESET-AUTHORS.md](PRESET-AUTHORS.md) for sharing presets on Nexus.
+For a startup failure, send the complete `DietDrCamera.log`, `skse64.log` and
+error message from the same launch. Version 1.2.0 records startup diagnostics
+automatically; Verbose Logging is not required. See
+[SUPPORT-LOGGING.md](SUPPORT-LOGGING.md) for log locations and reporting steps.
 
 ## Build and package
 
@@ -54,7 +58,8 @@ The source ZIP contains no game files; building the DLL does not require Skyrim.
 
 Release diagnostics use relative source paths and a filename-only PDB reference.
 Keep the matching PDB with the private release records for crash analysis.
-In-game tracing is available through Verbose Logging; it is off by default.
+Startup diagnostics are always enabled and retain three previous DDC sessions.
+Additional in-game tracing is available through Verbose Logging; it is off by default.
 
 ## Release verification
 

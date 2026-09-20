@@ -1,5 +1,6 @@
 #include "Camera/SpellTrajectory.h"
 #include "Camera/RayHitFilter.h"
+#include "Camera/ProjectileFlight.h"
 
 #include <cstdlib>
 #include <array>
@@ -240,5 +241,55 @@ int main()
         Check(obstructed.hit && obstructed.points.back().y < 1.0f,
             "Nearby object disappeared behind overlapping self/projectile hits");
     }
-    std::cout << "Spell gravity trajectory checks passed\n";
+    {
+        // The enemy intersects the initial prediction at t=.4, then steps
+        // aside. The real missile passes through that old point and hits a
+        // wall at t=1.2. Neither the predicted arrival nor a clock confirms it.
+        DietDrCamera::ProjectileFlight::Flight<Point> flight;
+        flight.Observe({0,0,100},0);
+        const auto enemy = [](Point from, Point to, float& fraction) {
+            if (from.y <= 1000 && to.y >= 1000) { fraction = (1000-from.y)/(to.y-from.y); return true; }
+            return false;
+        };
+        auto future = Flight::Trace(Point{0,0,100}, Point{0,2500,0}, Point{}, 8000, enemy);
+        Check(future.hit && std::abs(future.duration-.4f) < .001f, "Moving-target fixture missed its initial prediction");
+        for (int frame = 1; frame <= 60; ++frame) {
+            const float time = frame/60.0f;
+            flight.Observe({0,2500*time,100}, time);
+            flight.Advance(1.0f/60);
+        }
+        Check(!flight.Confirmed() && !flight.Expired(), "Predicted arrival fabricated an impact or expired a live projectile");
+        const auto wall = [](Point from, Point to, float& fraction) {
+            if (from.y <= 3000 && to.y >= 3000) { fraction = (3000-from.y)/(to.y-from.y); return true; }
+            return false;
+        };
+        future = Flight::Trace(Point{0,2500,100}, Point{0,2500,0}, Point{}, 5500, wall);
+        const auto updated = flight.Compose(future);
+        Check(Near(updated.front(),Point{0,0,100}) && Near(updated.back(),Point{0,3000,100}),
+            "A moving enemy left the fired trace pinned to its old hit point");
+        Check(Near(Flight::AtFraction(updated,1.0f/1.2f), Point{0,2500,100},.1f),
+            "Observed travel and remaining prediction do not join at the native projectile");
+        flight.Confirm({0,3000,100},1.2f);
+        flight.Observe({0,3500,100},1.4f);
+        Check(flight.Confirmed() && Near(flight.Compose().back(),Point{0,3000,100}), "Actual collision did not own the final impact");
+        flight.Advance(.9f);
+        Check(!flight.Expired(), "Confirmed impact disappeared before its settling tail");
+        flight.Advance(.11f);
+        Check(flight.Expired(), "Confirmed impact never faded");
+    }
+    {
+        DietDrCamera::ProjectileFlight::Flight<Point> lost;
+        lost.Observe({0,0,0},0); lost.Observe({0,50,0},.1f);
+        lost.Lose();
+        Check(lost.Expired() && !lost.Confirmed(), "An unloaded/deleted projectile became a false hit");
+        DietDrCamera::ProjectileFlight::Flight<Point> instant;
+        instant.Observe({0,0,0},0); instant.Confirm({0,2,0},0);
+        Check(instant.Confirmed() && Near(instant.Compose().back(),Point{0,2,0}), "Same-frame contact lost its actual impact point");
+        DietDrCamera::ProjectileFlight::Flight<Point> longFlight;
+        for (int i=0; i<2000; ++i) longFlight.Observe({0,float(i),0},i*.005f);
+        const auto path = longFlight.Compose();
+        Check(path.size() <= 129 && Near(path.front(),Point{}) && Near(path.back(),Point{0,1999,0}),
+            "Observed flight exceeded its render budget or lost its endpoints");
+    }
+    std::cout << "Spell trajectory checks passed (native flight, moving targets, confirmed impacts and bounded lifetime)\n";
 }

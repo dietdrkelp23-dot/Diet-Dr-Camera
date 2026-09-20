@@ -30,13 +30,9 @@ If using a development checkout whose CommonLib is a submodule, run
 `git submodule update --init --recursive` first. The complete public source
 archive and the prepared public repository already contain its source files.
 
-For the tagged 1.1.1 source:
-
-```powershell
-git clone https://github.com/dietdrkelp23-dot/Diet-Dr-Camera.git C:\src\Diet-Dr-Camera
-Set-Location C:\src\Diet-Dr-Camera
-git checkout v1.1.1
-```
+For version 1.2.0, extract `Diet Dr Camera - Source-1.2.0.zip` to a short path
+and run the commands below from that directory. The matching source ZIP is
+the release's complete build input; it does not require a GitHub tag to exist.
 
 Set up vcpkg once, outside the project:
 
@@ -111,6 +107,11 @@ hashes; byte-for-byte reproducibility across arbitrary toolchains is not promise
   rather than reusing another checkout's CMake cache.
 - **Runtime hook error:** retain the full DDC/SKSE logs, executable version, and
   mod list. A successful build does not resolve a runtime-specific hook failure.
+
+The optional executable-image matrix additionally requires Python's `pefile`
+package and private game executables/Address Library databases. Those inputs
+are not needed for the build or standalone CTests and are not distributed.
+See [RUNTIME-MATRIX.md](RUNTIME-MATRIX.md) for that separate workflow.
 
 See [runtime support](RUNTIME-SUPPORT.md), [release checks](RELEASE-CHECKLIST.md),
 and [license information](LICENSING.md).

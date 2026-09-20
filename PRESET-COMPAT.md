@@ -56,6 +56,53 @@ Form bindings use plugin name plus local form ID; never persist load-order IDs.
 
 ## Format versions
 
+Cinematic Views is deferred and has no active menu or runtime in the current
+build. Its format-12/13 data reader and writer remain solely to preserve existing
+definitions when presets are loaded or saved. View profiles are excluded from
+active profile enumeration. The view behavior described below documents the
+deferred implementation; the current writer stays at format 13.
+
+Format 13 adds optional `trigger_point = [x, y, z]` to each cinematic view.
+New views capture the player's position when the picker scans. Radius measures
+three-dimensional distance from that position, independently of the focus point.
+The stored worldspace/cell identity scopes both positions. Missing trigger_point
+retains subject-centered activation for older bindings; Set Here creates or moves
+the trigger without changing the focus, camera settings or view ID. It resets
+only that view's encounter history. Malformed trigger coordinates reject the
+entire preset before settings change. Distant scenery stores a fixed focus point
+without requiring a reference identity or a loaded target cell.
+
+Format 12 adds `[cinematic.combat_framing]` (`zoom_intensity` and `fov_intensity`,
+each 0-3 and default zero) and `[[cinematic_views]]`. The unreleased `zoom` / `fov`
+maximum controls were retired before public release; they are not reinterpreted
+as intensities or emitted by the writer. Views preserve unique IDs, stable
+plugin/local reference and worldspace/cell identities, focus point, radius,
+idle_delay, lock_on_tightness (0-1, default 0.5), and a nested camera table using
+the shared CameraProfile codec, including per-channel transitions. Every view automatically uses a ten-second
+first radius encounter followed by its own idle timer on later visits. Vanity
+Camera settings do not govern these timers. The writer emits no trigger flags,
+duration or repeat delay. Existing native camera tables and idle_delay survive.
+Missing lock_on_tightness preserves the previous framing through its default.
+Legacy range becomes radius. Shot-only definitions receive normal third-person
+profile defaults. Retired first_encounter/idle_only/trigger/duration keys and
+world-space zoom/relative FOV values are ignored. Older public presets keep both
+features off. Encounter history belongs to the SKSE co-save, not the preset.
+Invalid view identities, coordinates or camera-table shape are rejected before
+changing settings.
+
+Preset operations persist the active selection immediately; native Journal
+events are not required. This applies equally to the menu, preset hotkeys and
+launchers such as Risa. Successful selection never implicitly updates tuning.
+
+Selecting any preset, including the already-active preset, restores its latest
+saved settings and discards unsaved edits. This is the user's explicit rollback
+operation, not a save or navigation-only action (user ruling 2026-09-18).
+Menu rows, preset cycling and startup use unconditional `LoadPreset`. Update
+and Save as New are the explicit tuning saves; global preference/game-save
+writes never save camera tuning. The detail card follows preset names and
+active-selection changes, so Save as New,
+Quick Tune, renaming and list sorting cannot leave Update targeting an old row.
+
 `[meta].format = 1` is the frozen original schema. Format 2 adds the staff ritual
 profiles and associated override keys. Format 3 adds independent third-person
 and first-person NPC melee noise amounts (both default to zero). Format 4 adds
@@ -78,6 +125,32 @@ profiles. Pitch Bias is a target-lock override with no global control; its
 disabled, zero default preserves all earlier camera behavior. Explicit zero
 overrides and disabled-but-authored values survive save/load. Version 1.1 writes
 format 8 and reads formats 1-7. Frozen release fixtures remain unchanged.
+
+Format 9 adds `transition_height_bias`, `transition_zoom_bias` and
+`transition_fov_bias`, each with a matching `transition_set_*_bias` toggle.
+They are Target Lock proximity overrides, disabled and zero by default, with
+the same -1.5 to +1.5 range and 600-game-unit fade as Pitch Bias. One unit at
+contact adds 50 height game units, 10 Zoom slider units (44.36 game units), or
+15 FOV degrees respectively. Positive values raise the camera, pull back, or
+widen the view. Each channel is independent; enabled zero overrides and
+disabled tuning are preserved. Formats 1-8 retain their previous behavior.
+
+Format 10 adds `[cinematic.damage_reaction.third_person]` and
+`[cinematic.damage_reaction.first_person]`. Each view stores only `intensity`
+(0-3), defaulting to zero. Motion character, direction and recovery are tuned
+internally. The unreleased experimental `recovery`, `direction` and `texture`
+keys are ignored on load and omitted on save. Existing intensity values retain
+their meaning, and older presets stay silent.
+
+Format 11 separates Projectile Tracing by view. The existing `[general]`
+tracing toggles, reticle size/thickness and sneak-meter offset keys remain the
+third-person values. `[projectile_tracing.first_person]` stores `archery_enabled`,
+`spell_enabled`, `reticle_size`, `reticle_thickness`, `sneak_eye_x` and
+`sneak_eye_y`. Formats 1-10 copy their shared values into first person on load;
+subsequent saves write independent format-11 values. In format 11, absent
+first-person keys use defaults (both toggles off, size 1, thickness 2, offsets
+-500/-100), never the third-person values. Disabled appearance tuning survives
+save/load. Legacy reticle color and smoothing keys keep their existing storage.
 
 Format-6 Hit Shake converts once on load: Strength preserves the old wave's
 first-peak amplitude before axis mixing/limiting, Speed matches its first-peak

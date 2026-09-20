@@ -1,4 +1,4 @@
-DIET DR CAMERA 1.0.0 - REQUIREMENTS
+DIET DR CAMERA 1.2.0 - REQUIREMENTS
 
 Windows x64, Skyrim Special Edition / Anniversary Edition.
 One DLL targets the known SE/AE executable versions listed in RUNTIME-SUPPORT.md,
@@ -43,7 +43,7 @@ https://www.nexusmods.com/skyrimspecialedition/mods/92109
 
 INSTALLATION
 
-Install Diet Dr Camera-1.0.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
+Install Diet Dr Camera-1.2.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
 Open SKSE Menu Framework with its configured shortcut (upstream default F1),
 then select Diet Dr Camera. Save your tuning to a named preset in the Presets panel.
 The main archive contains only the DLL and the empty stagger-camera animation

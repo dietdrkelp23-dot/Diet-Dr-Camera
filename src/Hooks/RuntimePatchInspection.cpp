@@ -91,8 +91,10 @@ namespace DietDrCamera::RuntimePatchInspection
         std::optional<UIJob> result;
         for (std::size_t i = 1; i + 7 < ins.size(); ++i) {
             const auto& branch = ins[i];
+            const bool disabled = (branch.opcode == 0xEB && branch.length == 2) ||
+                (branch.opcode == 0xE9 && branch.length == 5);
             if (!((branch.opcode == 0x75 && branch.length == 2) ||
-                (branch.opcode == 0x0F && branch.opcode2 == 0x85 && branch.length == 6))) continue;
+                (branch.opcode == 0x0F && branch.opcode2 == 0x85 && branch.length == 6) || disabled)) continue;
             const auto& cmp = ins[i - 1];
             if (cmp.length != 7 || code[cmp.offset] != 0x80 || code[cmp.offset + 1] != 0x3D ||
                 code[cmp.offset + 6] != 0) continue;
@@ -112,7 +114,7 @@ namespace DietDrCamera::RuntimePatchInspection
                 execute.opcode != 0xE8 || execute.length != 5 ||
                 branch.target != address + execute.offset + execute.length) continue;
             if (result) return std::nullopt;
-            result = UIJob{ branch.offset, branch.length, execute.target };
+            result = UIJob{ branch.offset, branch.length, execute.target, disabled };
         }
         return result;
     }

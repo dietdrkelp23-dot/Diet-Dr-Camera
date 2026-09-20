@@ -4,12 +4,41 @@
 #include <array>
 #include <string_view>
 #include <cctype>
+#include "Core/DamageReactionAttacks.h"
 
 namespace DietDrCamera::NpcNoise
 {
     enum class Source { None, Magic, Melee, Archery, Transformations, Shouts };
     enum class Form { None, Werewolf, VampireLord };
     enum class Action { Attack, PowerAttack, SprintPowerAttack, Roar, Concentration, FireAndForget };
+
+    inline bool OwnsCinematicNoise(DamageReaction::Family family)
+    {
+        return family == DamageReaction::Family::Dragon || family == DamageReaction::Family::Centurion;
+    }
+
+    // Cast events and first projectile updates are two reports of a release.
+    // Per-actor memory keeps simultaneous creatures independent.
+    class CastTracker
+    {
+    public:
+        bool Observe(std::uint32_t spell, std::uint32_t projectile, double now)
+        {
+            if (!spell || !std::isfinite(now)) return false;
+            for (auto& prior : releases) {
+                if (prior.spell != spell || now < prior.time || now-prior.time > .15) continue;
+                if (projectile && prior.projectile && projectile != prior.projectile) continue;
+                if (projectile) prior.projectile = projectile;
+                return false;
+            }
+            releases[next++ % releases.size()] = {spell, projectile, now};
+            return true;
+        }
+    private:
+        struct Release { std::uint32_t spell = 0, projectile = 0; double time = 0; };
+        std::array<Release, 4> releases{};
+        std::size_t next = 0;
+    };
 
     inline bool ContainsCI(std::string_view text, std::string_view word)
     {

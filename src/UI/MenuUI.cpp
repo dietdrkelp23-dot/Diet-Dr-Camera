@@ -1,4 +1,4 @@
-#include "PCH.h"
+﻿#include "PCH.h"
 #include "Camera/ProfileSnapshot.h"
 #define NOMINMAX
 #include <Windows.h>
@@ -29,10 +29,18 @@
 #include "Locations/LocationDetector.h"
 #include "Settings/Defaults.h"
 #include "Settings/PresetManager.h"
+#include "UI/PresetSelection.h"
 #include "Settings/SettingsManager.h"
 #include "Settings/EquippedItemBinding.h"
 #include "Settings/OverrideInheritance.h"
 #include "UI/SKSEMenuFramework.h"
+#include "UI/MenuNavigationItem.h"
+#include "UI/MenuControllerCapture.h"
+#include "UI/MenuControllerHintBar.h"
+#include "UI/MenuPopupHintBar.h"
+#include "UI/MenuKeyboardInput.h"
+#include "Input/KeyboardScanCode.h"
+#include "UI/ClipboardHintHover.h"
 #include <array>
 #include <cfloat>
 #include <chrono>
@@ -202,10 +210,9 @@ namespace DietDrCamera
         //   A                   activate buttons/checkboxes/entries; on a
         //                       slider track: grab it for d-pad editing,
         //                       press A again to stop
-        //   B                   close the open popup
+        //   B                   cancel slider edit, close popup, or enter sidebar
         //   d-pad left/right    step a grabbed slider: a tap moves one
         //                       step, holding repeats at a steady rate
-        //   Y                   save the active preset
         //   LB / RB             while a slider is grabbed: jump the value by
         //                       a coarse 10x step (holding repeats); otherwise
         //                       previous / next tab (wraps at both ends)
@@ -214,12 +221,11 @@ namespace DietDrCamera
         // Pad frame state, published by FeedGamepadNav and consumed by
         // DrawSliderTrack (grab), PadTabBar (bumpers), PadScrollBody
         // (triggers/right stick) and the overlay toasts.
-        static bool   sPadConnected      = false;
-        // Pad-enabled render scope. Only Quick Tune turns this on (its
-        // FeedGamepadNav call); every main-menu section turns it off for
-        // its own span. Widgets outside the scope don't register, so the
-        // two UIs can render in the same frame without the main menu
-        // polluting or wiping Quick Tune's registry.
+        static bool   sMenuNavAvailable      = false;
+        static bool   sKeyboardHints = true;
+        static bool   sKeyboardCursor = false;
+        // Only the focused DDC section, or Quick Tune while the main panel
+        // is closed, registers widgets and handles the custom controller.
         static bool   sPadScopeOn       = false;
         // True while the framework's Mod Control Panel is open â€” fed by
         // the framework's event stream (kOpenMenu/kCloseMenu fire ONLY
@@ -234,49 +240,26 @@ namespace DietDrCamera
         // pad to the framework's stock nav (the panel's section sidebar
         // is framework UI we can't wrap); d-pad RIGHT hands it back.
         // While active, our cursor hides and our pad handling pauses.
-        static bool sPadSidebarMode = false;
-        // One-shot: place the cursor on the topmost item next feed (set
-        // on sidebar exit so a single RIGHT press lands on the first tab).
+        static MenuControllerCapture sPadCapture;
+        static MenuHintBarLayout sPadHintLayout;
+        static MenuPopupHintBar sLocationHintBar;
+        static std::atomic<bool> sPadCaptureResetRequested{false};
+        static bool sPadRenderingSection = false;
+        static int sPadSectionEntryFrame = -1000;
+        // Place the cursor after the current page registers its items, so
+        // pressing RIGHT from the sidebar shows it in the same frame.
         static bool sPadPlaceTopmostReq = false;
 
         static void __stdcall OnMenuFrameworkEvent(int a_type)
         {
-            using namespace ImGuiMCP;
             if (a_type == 1) {          // kOpenMenu
                 sPadPanelOpen.store(true, std::memory_order_relaxed);
             } else if (a_type == 2) {   // kCloseMenu
                 sPadPanelOpen.store(false, std::memory_order_relaxed);
-                sPadSidebarMode = false;
-            } else if (a_type == 3) {   // kBeforeRender â€” right before NewFrame
-                // SMF re-enables ImGui's stock nav from its input-enable
-                // path, and clearing the flag during OUR render is too
-                // late (NewFrame already consumed it that frame) â€” the
-                // panel's section SIDEBAR kept dancing with the d-pad.
-                // kBeforeRender fires immediately before NewFrame (verified
-                // in SMF-3 Hooks.cpp), so a clear here sticks for the frame.
-                // Gated on our UI having rendered, so other mods' pages keep
-                // the framework's stock nav.
-                // In sidebar mode the framework's stock nav is exactly
-                // what drives the section list â€” leave its flags alone.
-                //
-                // BOTH nav flags: a newer SMF feeds the controller as
-                // KEYBOARD nav keys (arrows + Enter/Space), not just the
-                // ImGuiKey_Gamepad* keys â€” those ride NavEnableKeyboard, so
-                // clearing only NavEnableGamepad left stock KEYBOARD nav
-                // live. It drove ImGui's focused widget (which sits in the
-                // LEFT list) while our pad cursor was in the RIGHT pane: the
-                // d-pad moved the left pane and A activated it there. Typing
-                // into InputText is unaffected (that's text input, not nav).
-                if (!sPadSidebarMode &&
-                    ImGui::GetFrameCount() - sPadFeedFrame <= 1) {
-                    if (auto* io = ImGui::GetIO()) {
-                        io->ConfigFlags  &= ~ImGuiConfigFlags_NavEnableGamepad;
-                        io->ConfigFlags  &= ~ImGuiConfigFlags_NavEnableKeyboard;
-                        io->BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
-                    }
-                }
+                sPadCaptureResetRequested.store(true, std::memory_order_relaxed);
             }
         }
+
         static bool   sPadAEdge = false, sPadBEdge = false;
         // Bumper EDGES drive tab switching (one tab per press, no repeat);
         // bumper TICKS drive the grabbed-slider coarse jump (hold-to-repeat
@@ -357,7 +340,7 @@ namespace DietDrCamera
         static bool PadApplyTriggerScroll()
         {
             using namespace ImGuiMCP;
-            if (!sPadConnected || !sPadScopeOn) return false;
+            if (!sMenuNavAvailable || !sPadScopeOn) return false;
             const float dir = (sPadRT - sPadLT) - sPadRStickY;   // stick up = scroll up
             if (std::abs(dir) < 0.10f) return false;
             const float maxY = ImGui::GetScrollMaxY();
@@ -408,7 +391,7 @@ namespace DietDrCamera
                     pending = request;
                     request = -1;
                 }
-                if (!sPadConnected || !sPadScopeOn || count <= 0) return;
+                if (!sMenuNavAvailable || !sPadScopeOn || count <= 0) return;
                 if (sPadGrabValue) return;            // adjusting a slider
                 if (sPadBumperConsumed) return;
                 if (!a_inPopup && ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup)) return;
@@ -503,6 +486,7 @@ namespace DietDrCamera
         // binder during render; a frame stamp self-clears (no order dependence
         // between render and the nav feed).
         static int     sPadHotkeyCaptureFrame = -100;
+        static int     sPadHintBindingFrame = -100; // display state for the older standalone binders
         static bool    sPadCompCloseReq = false;   // B pressed while a companion overlay is up
         static bool    sPadPopupCloseReq = false;  // B pressed while a modal popup is up
         static bool    sPadQtCloseReq = false;     // B pressed at the Quick Tune top level
@@ -628,35 +612,16 @@ namespace DietDrCamera
             ImGui::EndDisabled();
         }
 
-        // Current item rect for pad purposes, clamped horizontally to the
-        // host window's visible content â€” a Selectable with a long label
-        // reports its UNCLIPPED width, which made the cursor outline draw
-        // past the box edge (long weapon names in Specific Weapons). The
-        // pad only ever hovers what is actually seen on screen.
         static PadItem PadCurrentItemRect()
         {
-            using namespace ImGuiMCP;
-            ImVec2 mn, mx;
-            ImGui::GetItemRectMin(&mn);
-            ImGui::GetItemRectMax(&mx);
-            ImVec2 wp, cmin, cmax;
-            ImGui::GetWindowPos(&wp);
-            ImGui::GetWindowContentRegionMin(&cmin);
-            ImGui::GetWindowContentRegionMax(&cmax);
-            float x0 = (std::max)(mn.x, wp.x + cmin.x);
-            float x1 = (std::min)(mx.x, wp.x + cmax.x);
-            if (x1 <= x0) { x0 = mn.x; x1 = mx.x; }   // degenerate clamp: keep raw
-            ImVec2 ws;
-            ImGui::GetWindowSize(&ws);
-            return PadItem{x0, mn.y, x1, mx.y, sPadRenderLayer, ImGui::GetItemID(),
-                           wp.y, wp.y + ws.y, wp.x, wp.x + ws.x};
+            return CurrentMenuNavigationItem(sPadRenderLayer, sPadCapture.IsSupported());
         }
 
         // Register the just-submitted imgui item as a pad item.
         static int PadRegisterItem()
         {
             using namespace ImGuiMCP;
-            if (!sPadConnected || !sPadScopeOn || sPadDisabledActive > 0 ||
+            if (!sMenuNavAvailable || !sPadScopeOn || sPadDisabledActive > 0 ||
                 sPadItemN >= kPadMaxItems) return -1;
             sPadItems[sPadItemN] = PadCurrentItemRect();
             return sPadItemN++;
@@ -684,7 +649,7 @@ namespace DietDrCamera
         static void PadScrollBody(bool a_inPopup)
         {
             using namespace ImGuiMCP;
-            if (!sPadConnected || !sPadScopeOn) return;
+            if (!sMenuNavAvailable || !sPadScopeOn) return;
             if (!a_inPopup && ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup)) return;
 
             // D-pad reveal across windows: when the cursor lives in a
@@ -1029,8 +994,8 @@ namespace DietDrCamera
             // Glided cursor â€” pad scope only; hidden while a slider is
             // grabbed (the track's amber grab outline takes over) or the
             // framework's sidebar owns the pad.
-            if (!sPadScopeOn || !sPadConnected || !sPadHasCursor ||
-                sPadGrabValue != nullptr || sPadSidebarMode) {
+            if (!sPadScopeOn || !sMenuNavAvailable || !sPadHasCursor ||
+                sPadGrabValue != nullptr || sPadCapture.IsSidebar() || (sKeyboardHints && !sKeyboardCursor)) {
                 if (!sPadHasCursor) sPadCursorVisInit = false;
                 return;
             }
@@ -1099,25 +1064,42 @@ namespace DietDrCamera
             ImGui::PopItemFlag();
         }
 
-        // Disable ImGui's stock nav (gamepad AND keyboard) from ImGui's own
-        // NewFramePre context hook â€” the ONLY reliable point, because it runs
-        // at the very start of NewFrame BEFORE nav is processed. The SMF update
-        // changed its event timing/numbering (an extra per-frame event 4 now
-        // fires), so our a_type==kBeforeRender clear no longer lands: [NAVDIAG]
-        // showed navActive=1 with both flags still SET at render time, i.e. the
-        // framework fed the d-pad/A into stock nav and it drove ImGui's focused
-        // widget in the LEFT list while our pad cursor was in the RIGHT pane.
-        // Gated to our page (our UI rendered within the last couple frames) so
-        // other mods' pages keep their stock nav.
-        static void NavSuppressNewFramePre(ImGuiMCP::ImGuiContext*, ImGuiMCP::ImGuiContextHook*)
+        // The framework consumes raw B before its plugin input callbacks.
+        // An active custom navigation widget lets that press reach DDC. Restore
+        // shared flags in NewFramePost; never leave another mod's nav disabled.
+        static void PadFinishFrame();
+        static void PadRenderHints();
+        static void PadFrameHook(ImGuiMCP::ImGuiContext*, ImGuiMCP::ImGuiContextHook* hook)
         {
             using namespace ImGuiMCP;
-            if (sPadSidebarMode) return;                       // sidebar wants stock nav
-            if (ImGui::GetFrameCount() - sPadFeedFrame > 2) return;  // not our page
-            if (auto* io = ImGui::GetIO()) {
-                io->ConfigFlags  &= ~ImGuiConfigFlags_NavEnableKeyboard;
-                io->ConfigFlags  &= ~ImGuiConfigFlags_NavEnableGamepad;
-                io->BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
+            static int quickTuneNavFlags = 0;
+            if (hook->Type == ImGuiContextHookType_NewFramePre) {
+                if (sPadCaptureResetRequested.exchange(false, std::memory_order_relaxed)) sPadCapture.Reset();
+                XINPUT_STATE pad{};
+                const bool connected = XInputGetState(0, &pad) == ERROR_SUCCESS;
+                const bool panelOpen = sPadPanelOpen.load(std::memory_order_relaxed);
+                sPadCapture.BeforeNewFrame(connected, panelOpen,
+                    (pad.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0 ||
+                        (GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0, true);
+                const bool quickTune = !panelOpen && sQuickTuneWindow && sQuickTuneWindow->IsOpen.load();
+                const bool legacyPage = panelOpen && !sPadCapture.IsSupported() &&
+                    sPadCapture.RenderedThisFrame() && sPadCapture.IsUsable() && !sPadCapture.IsSidebar();
+                if ((quickTune || legacyPage) && sPadFeedFrame == ImGui::GetFrameCount()) {
+                    auto* io = ImGui::GetIO();
+                    constexpr int flags = ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+                    quickTuneNavFlags = io->ConfigFlags & flags;
+                    io->ConfigFlags &= ~flags;
+                }
+            } else if (hook->Type == ImGuiContextHookType_NewFramePost) {
+                sPadCapture.AfterNewFrame();
+                sPadHintLayout.BeforePanel(sPadPanelOpen.load(std::memory_order_relaxed));
+                ImGui::GetIO()->ConfigFlags |= quickTuneNavFlags;
+                quickTuneNavFlags = 0;
+            } else if (hook->Type == ImGuiContextHookType_EndFramePre) {
+                PadFinishFrame();
+                PadRenderHints();
+                sPadHintLayout.EndFrame();
+                sPadCapture.EndFrame();
             }
         }
 
@@ -1127,17 +1109,18 @@ namespace DietDrCamera
             auto* io = ImGui::GetIO();
             if (!io) return;
 
-            // Register the NewFramePre nav-suppression hook once, now that we're
-            // rendering INTO the framework's live ImGui context (so it exists).
-            static bool sNavHookAdded = false;
-            if (!sNavHookAdded) {
-                if (auto* ctx = ImGui::GetCurrentContext()) {
-                    static ImGuiContextHook sHook{};
-                    sHook.Type     = ImGuiContextHookType_NewFramePre;
-                    sHook.Callback = &NavSuppressNewFramePre;
-                    ImGui::AddContextHook(ctx, &sHook);
-                    sNavHookAdded = true;
-                    spdlog::info("MenuUI: registered NewFramePre nav-suppression hook");
+            static bool hooksAdded = false;
+            if (!hooksAdded) {
+                if (auto* context = ImGui::GetCurrentContext()) {
+                    for (const auto type : {ImGuiContextHookType_NewFramePre,
+                             ImGuiContextHookType_NewFramePost, ImGuiContextHookType_EndFramePre}) {
+                        ImGuiContextHook hook{};
+                        hook.Type = type;
+                        hook.Callback = &PadFrameHook;
+                        ImGui::AddContextHook(context, &hook);
+                    }
+                    hooksAdded = true;
+                    spdlog::info("MenuUI: registered scoped controller capture ({})", ImGui::GetVersion());
                 }
             }
 
@@ -1148,22 +1131,6 @@ namespace DietDrCamera
             sPadFeedFrame = frame;   // our UI rendered this frame
 
             sPadScopeOn = true;
-
-            // SMF feeds controller buttons into ImGui as nav keys. With
-            // stock nav enabled those presses ALSO act on whatever ImGui
-            // has focused â€” a second, invisible actor fighting this scheme
-            // (the enable checkbox toggling right back off, a second slider
-            // reacting to A). Keep BOTH stock nav paths OFF in the shared
-            // context every frame: a newer SMF maps the d-pad/A to KEYBOARD
-            // nav keys (arrows + Enter/Space, on NavEnableKeyboard), not
-            // only ImGuiKey_Gamepad* (on NavEnableGamepad) â€” clearing just
-            // the gamepad flag left keyboard nav driving the LEFT list while
-            // our cursor was in the RIGHT pane. (kBeforeRender above is the
-            // one that actually sticks for the frame; this is the belt-and-
-            // suspenders clear inside our render.)
-            io->ConfigFlags  &= ~ImGuiConfigFlags_NavEnableGamepad;
-            io->ConfigFlags  &= ~ImGuiConfigFlags_NavEnableKeyboard;
-            io->BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
 
             // Per-frame outputs.
             sPadAEdge = sPadBEdge = false;
@@ -1248,21 +1215,51 @@ namespace DietDrCamera
             if (sPadToastT > 0.0f) sPadToastT -= dt;
 
             XINPUT_STATE xs{};
-            if (XInputGetState(0, &xs) != ERROR_SUCCESS) {
-                sPadConnected = false;
+            const bool connected = XInputGetState(0, &xs) == ERROR_SUCCESS;
+            static bool wasConnected = false;
+            if (wasConnected && !connected) {
                 sPadGrabValue = nullptr;
-                sPadCursor    = -1;
-                return;
+                PadGrabClearShadow();
             }
-            sPadConnected = true;
+            wasConnected = connected;
+            // The shared item registry is also available without a controller.
+            sMenuNavAvailable = true;
 
             const auto& gp = xs.Gamepad;
             static WORD sPrevButtons = 0;
             const WORD held = gp.wButtons;
             const WORD edge = static_cast<WORD>(held & ~sPrevButtons);
             sPrevButtons = held;
+            const bool gamepadInput = connected && (edge != 0 || gp.bLeftTrigger > 30 || gp.bRightTrigger > 30 ||
+                std::abs(static_cast<int>(gp.sThumbRY)) > XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
+            if (gamepadInput) { sKeyboardHints = false; sKeyboardCursor = false; }
+            if (!connected || ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1)) sKeyboardHints = true;
+            if (ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1)) {
+                sKeyboardCursor = false;
+                sPadHasCursor = false;
+                sPadCursor = -1;
+                sPadGrabValue = nullptr;
+                PadGrabClearShadow();
+            }
+            for (int key = ImGuiKey_Tab; key < ImGuiKey_GamepadStart; ++key) {
+                const auto* data = ImGui::GetKeyData(static_cast<ImGuiKey>(key));
+                if (data->Down && data->DownDuration == 0.0f) { sKeyboardHints = true; break; }
+            }
+            const bool binding = frame - sPadHotkeyCaptureFrame <= 1 || frame - sPadHintBindingFrame <= 1;
+            const bool editing = io->WantTextInput || (sPadRenderingSection &&
+                ImGui::GetActiveID() != 0 && !sPadCapture.OwnsCapture());
+            const auto keyboard = MenuKeyboardInput::Read(!binding && !editing);
+            if (keyboard.Any()) { sKeyboardHints = true; sKeyboardCursor = true; }
 
-            sPadAEdge  = (edge & XINPUT_GAMEPAD_A) != 0;
+            // A used to choose a section belongs to the sidebar. Establish the
+            // button baseline without forwarding that press to page controls.
+            if (sPadRenderingSection &&
+                (!sPadCapture.IsUsable() || frame == sPadSectionEntryFrame)) {
+                sPadScopeOn = sPadCapture.IsUsable();
+                return;
+            }
+
+            sPadAEdge  = (edge & XINPUT_GAMEPAD_A) != 0 || keyboard.confirm;
             sPadBEdge  = (edge & XINPUT_GAMEPAD_B) != 0;
             sPadLBEdge = (edge & XINPUT_GAMEPAD_LEFT_SHOULDER)  != 0;
             sPadRBEdge = (edge & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
@@ -1282,9 +1279,9 @@ namespace DietDrCamera
             // directly) instead of activating widgets / moving the cursor. Without
             // this, pressing A to bind it just re-clicks the bind button forever.
             // sPrevButtons was updated above, so edges resync when capture ends.
-            if (frame - sPadHotkeyCaptureFrame <= 1) {
-                PadDrawAnimations();
-                PadDrawOverlays(io);
+            if (binding || editing) {
+                sPadAEdge = sPadBEdge = sPadLBEdge = sPadRBEdge = false;
+                sPadLT = sPadRT = sPadRStickY = 0.0f;
                 return;
             }
 
@@ -1305,10 +1302,10 @@ namespace DietDrCamera
             static float sDpadLHold = -1.0f, sDpadRHold = -1.0f;
             static float sDpadUHold = -1.0f, sDpadDHold = -1.0f;
             bool dpadUpTick = false, dpadDownTick = false;
-            repeatTick((held & XINPUT_GAMEPAD_DPAD_LEFT)  != 0, sDpadLHold, sPadDpadLeftTick);
-            repeatTick((held & XINPUT_GAMEPAD_DPAD_RIGHT) != 0, sDpadRHold, sPadDpadRightTick);
-            repeatTick((held & XINPUT_GAMEPAD_DPAD_UP)    != 0, sDpadUHold, dpadUpTick);
-            repeatTick((held & XINPUT_GAMEPAD_DPAD_DOWN)  != 0, sDpadDHold, dpadDownTick);
+            repeatTick((held & XINPUT_GAMEPAD_DPAD_LEFT)  != 0 || keyboard.left, sDpadLHold, sPadDpadLeftTick);
+            repeatTick((held & XINPUT_GAMEPAD_DPAD_RIGHT) != 0 || keyboard.right, sDpadRHold, sPadDpadRightTick);
+            repeatTick((held & XINPUT_GAMEPAD_DPAD_UP)    != 0 || keyboard.up, sDpadUHold, dpadUpTick);
+            repeatTick((held & XINPUT_GAMEPAD_DPAD_DOWN)  != 0 || keyboard.down, sDpadDHold, dpadDownTick);
             // Bumpers get the same auto-repeat so a held LB/RB keeps coarse-
             // jumping a grabbed slider. (Tab switching still reads the edge,
             // so holding a bumper off a slider doesn't spin through tabs.)
@@ -1319,16 +1316,14 @@ namespace DietDrCamera
             // Sidebar mode: the framework's stock nav owns the pad (it
             // drives the panel's section list). Our handling pauses and
             // the cursor hides; d-pad RIGHT returns to the page.
-            if (sPadSidebarMode) {
+            if (sPadCapture.IsSidebar()) {
                 if (!sPadPanelOpen.load(std::memory_order_relaxed) || sPadDpadRightTick) {
-                    sPadSidebarMode = false;
+                    sPadCapture.SetSidebar(false);
                     // One RIGHT press lands on the page's first tab.
                     sPadHasCursor = false;
                     sPadCursor    = -1;
                     sPadPlaceTopmostReq = true;
                 }
-                PadDrawAnimations();
-                PadDrawOverlays(io);
                 return;
             }
 
@@ -1490,9 +1485,9 @@ namespace DietDrCamera
                     moveCursor(-1, 0);
                     // LEFT with nowhere to go on a panel page: hand the
                     // pad to the framework's sidebar (stock nav).
-                    if (sPadCursor == pre && pre >= 0 &&
+                    if (activeLayer == 0 && (pre < 0 || sPadCursor == pre) &&
                         sPadPanelOpen.load(std::memory_order_relaxed)) {
-                        sPadSidebarMode = true;
+                        sPadCapture.SetSidebar(true);
                     }
                 }
                 if (sPadDpadRightTick)    moveCursor(+1, 0);
@@ -1507,7 +1502,7 @@ namespace DietDrCamera
                     } else if (sPadPanelOpen.load(std::memory_order_relaxed)) {
                         // Page level on the panel: B backs out to the
                         // section sidebar.
-                        sPadSidebarMode = true;
+                        sPadCapture.SetSidebar(true);
                     } else {
                         // Top level in Quick Tune: B closes the overlay
                         // (consumed in RenderQuickTune).
@@ -1543,9 +1538,53 @@ namespace DietDrCamera
                 sPadCommitRect = sPadItemsLast[sPadCursor];
                 sPadHasCommit  = true;
             }
+        }
 
+        static void PadFinishFrame()
+        {
+            using namespace ImGuiMCP;
+            const bool panel = sPadPanelOpen.load(std::memory_order_relaxed);
+            const bool page = sPadCapture.RenderedThisFrame() && sPadCapture.IsPageFocused();
+            const bool quickTune = !panel && sQuickTuneWindow && sQuickTuneWindow->IsOpen.load();
+            if (sPadFeedFrame != ImGui::GetFrameCount() || (!page && !quickTune)) return;
+            sPadScopeOn = true;
+            if (sMenuNavAvailable && !sPadCapture.IsSidebar() && sPadPlaceTopmostReq && sPadItemN > 0) {
+                int first = 0;
+                for (int i = 1; i < sPadItemN; ++i) {
+                    if (sPadItems[i].layer > sPadItems[first].layer ||
+                        (sPadItems[i].layer == sPadItems[first].layer && sPadItems[i].y0 < sPadItems[first].y0))
+                        first = i;
+                }
+                sPadCursorRect = sPadItems[first];
+                sPadHasCursor = true;
+                sPadCursorSnapReq = true;
+                sPadPlaceTopmostReq = false;
+            }
             PadDrawAnimations();
-            PadDrawOverlays(io);
+            PadDrawOverlays(ImGui::GetIO());
+        }
+
+        static void RenderControllerSection(SKSEMenuFramework::Model::RenderFunction renderer)
+        {
+            using namespace ImGuiMCP;
+            if (sPadCaptureResetRequested.exchange(false, std::memory_order_relaxed)) sPadCapture.Reset();
+            XINPUT_STATE pad{};
+            const bool connected = XInputGetState(0, &pad) == ERROR_SUCCESS;
+            const bool entering = sPadCapture.BeginPage(reinterpret_cast<const void*>(renderer), connected, true);
+            sPadHintLayout.BeginPage();
+            if (entering) {
+                sPadSectionEntryFrame = ImGui::GetFrameCount();
+                sPadItemN = sPadItemNLast = 0;
+                sPadCursor = -1;
+                sPadHasCursor = false;
+                sPadGrabValue = nullptr;
+                sPadPlaceTopmostReq = true;
+                sPadCursorSnapReq = true;
+            }
+            sPadRenderingSection = true;
+            renderer();
+            sPadRenderingSection = false;
+            sPadCapture.EndPage();
         }
 
         // Is the item just submitted the one the pad cursor is sitting on?
@@ -1554,8 +1593,17 @@ namespace DietDrCamera
         // "is this the row under the cursor right now".
         static bool PadItemIsCursor()
         {
-            if (!sPadHasCursor) return false;
+            if (!sPadScopeOn || !sMenuNavAvailable || !sPadHasCursor) return false;
+            if (sKeyboardHints && !sKeyboardCursor) return false;
             return PadSameItem(PadCurrentItemRect(), sPadCursorRect);
+        }
+
+        static bool ClipboardItemHovered()
+        {
+            // An idle mouse must not replace the arrow-selected copy/paste
+            // target. Clicking hands control back to the mouse in the feed.
+            return PadItemIsCursor() || (!(sKeyboardHints && sKeyboardCursor) &&
+                ImGuiMCP::ImGui::IsItemHovered(0));
         }
 
         // ===================================================================
@@ -1827,6 +1875,45 @@ namespace DietDrCamera
             EntryClipboardTarget owner{};
         };
         static EntryHoverTarget sEntryHover;
+        static ClipboardHintHover sClipboardHintHover;
+
+        static const char* ClipboardHintSubject(EntryClipKind kind)
+        {
+            namespace Labels = MenuControllerHints::ClipboardLabels;
+            switch (kind) {
+            case EntryClipKind::Camera:
+            case EntryClipKind::Noise:
+            case EntryClipKind::CineSource:
+            case EntryClipKind::FirstPerson:  return Labels::Entry;
+            case EntryClipKind::Transitions:  return Labels::Transition;
+            case EntryClipKind::LocationOv:
+            case EntryClipKind::FpLocationOv: return Labels::Location;
+            case EntryClipKind::WeaponOv:
+            case EntryClipKind::NoiseWeaponOv:
+            case EntryClipKind::FpWeaponOv:   return Labels::Weapon;
+            case EntryClipKind::EnemyOv:      return Labels::Enemy;
+            case EntryClipKind::ShoutSet:     return Labels::Shout;
+            case EntryClipKind::ShoutNoiseSet:return Labels::ShoutNoise;
+            case EntryClipKind::DialogueLook:return Labels::Dialogue;
+            case EntryClipKind::FxBeat:       return Labels::Transformation;
+            case EntryClipKind::EnvHalf:      return Labels::Environment;
+            case EntryClipKind::Tab:          return Labels::Tab;
+            default:                         return "";
+            }
+        }
+
+        static void RecordClipboardHint(const char* subject)
+        {
+            sClipboardHintHover.Publish(ImGuiMCP::ImGui::GetFrameCount(), PadCurrentItemRect(),
+                sPadCursorRect, sPadDisabledActive == 0 && PadItemIsCursor(), subject,
+                std::span<const PadItem>(sPadItems, sPadItemN));
+        }
+
+        static void PublishEntryHover(const char* subject = nullptr)
+        {
+            sEntryHover.owner = { ImGuiMCP::ImGui::GetFrameCount(), ImGuiMCP::ImGui::GetItemID() };
+            RecordClipboardHint(subject ? subject : ClipboardHintSubject(sEntryHover.kind));
+        }
         static std::string      sEntryClipStatus;
         static int              sEntryClipStatusFrame = -1000;
         static bool             sEntryClipQuiet = false;
@@ -1883,7 +1970,7 @@ namespace DietDrCamera
         {
             using namespace ImGuiMCP;
             if (!a_ptr || a_kind == EntryClipKind::None) return;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover.kind        = a_kind;
             sEntryHover.tabEntries.clear();
             sEntryHover.tabKeys.clear();
@@ -1910,7 +1997,7 @@ namespace DietDrCamera
             sEntryHover.halfNoise.clear();
             sEntryHover.label = ClipLabelWithSection(a_label);
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         }
 
         // Sentinel for keyed / index-addressed hover targets (the guards
@@ -1926,14 +2013,14 @@ namespace DietDrCamera
         {
             using namespace ImGuiMCP;
             if (!a_coord.valid) return;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover         = {};
             sEntryHover.kind    = EntryClipKind::EnemyOv;
             sEntryHover.ptr     = &sKeyedHoverSentinel;
             sEntryHover.enemyOv = a_coord;
             sEntryHover.label   = ClipLabelWithSection(a_label);
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         }
 
         // The toolbar renders before the entry lists. A frame check alone
@@ -1977,14 +2064,14 @@ namespace DietDrCamera
         {
             using namespace ImGuiMCP;
             if (a_key.empty() || a_kind == EntryClipKind::None) return;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover = {};
             sEntryHover.kind     = a_kind;
             sEntryHover.ptr      = &sKeyedHoverSentinel;
             sEntryHover.noiseKey = a_key;
             sEntryHover.label    = ClipLabelWithSection(a_label);
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         }
 
         // Shout-NOISE set hover: the row's whole key vocabulary, captured
@@ -1994,14 +2081,14 @@ namespace DietDrCamera
         {
             using namespace ImGuiMCP;
             if (a_keys.empty()) return;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover = {};
             sEntryHover.kind    = EntryClipKind::ShoutNoiseSet;
             sEntryHover.ptr     = &sKeyedHoverSentinel;
             sEntryHover.keyList = std::move(a_keys);
             sEntryHover.label   = ClipLabelWithSection(a_label ? a_label : "Shout Noise");
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         }
 
         // Env-half hover (the Outdoor/Indoor toggle): the hovered toggle's
@@ -2015,7 +2102,7 @@ namespace DietDrCamera
                                      const char* a_tabLabel)
         {
             using namespace ImGuiMCP;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover = {};
             sEntryHover.kind = EntryClipKind::EnvHalf;
             sEntryHover.ptr  = &sKeyedHoverSentinel;
@@ -2033,10 +2120,11 @@ namespace DietDrCamera
             }
             sEntryHover.label = ClipLabelWithSection(
                 (std::string(a_tabLabel ? a_tabLabel : "Tab") + " " +
-                 (a_env == SettingsManager::kEnvIndoor ? "Indoor" : "Outdoor") +
+                (a_env == SettingsManager::kEnvIndoor ? "Indoor" : "Outdoor") +
                  " (all entries)").c_str());
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover(a_env == SettingsManager::kEnvIndoor ?
+                MenuControllerHints::ClipboardLabels::Indoor : MenuControllerHints::ClipboardLabels::Outdoor);
         }
 
         // Dialogue look hover: bucket + index (paste may create at the end).
@@ -2045,7 +2133,7 @@ namespace DietDrCamera
         {
             using namespace ImGuiMCP;
             if (a_bucketIdx < 0 || a_lookIdx < 0) return;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover = {};
             sEntryHover.kind         = EntryClipKind::DialogueLook;
             sEntryHover.ptr          = &sKeyedHoverSentinel;
@@ -2053,7 +2141,7 @@ namespace DietDrCamera
             sEntryHover.dlgLookIdx   = a_lookIdx;
             sEntryHover.label        = ClipLabelWithSection(a_label ? a_label : "Dialogue Look");
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         }
 
         // ShoutSet hover: the row IS the state's whole shout block.
@@ -2062,7 +2150,7 @@ namespace DietDrCamera
         {
             using namespace ImGuiMCP;
             if (!a_base || !a_ovr || !a_en || !a_count) return;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover = {};
             sEntryHover.kind       = EntryClipKind::ShoutSet;
             sEntryHover.ptr        = a_base;
@@ -2072,7 +2160,7 @@ namespace DietDrCamera
             sEntryHover.shoutCount = a_count;
             sEntryHover.label      = ClipLabelWithSection(a_label ? a_label : "Shouts");
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         }
 
         static const char* EntryClipKindName(EntryClipKind a_kind)
@@ -2115,14 +2203,14 @@ namespace DietDrCamera
         {
             using namespace ImGuiMCP;
             if (a_fxBeat < 0 || a_fxBeat >= 6) return;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover = {};
             sEntryHover.kind      = EntryClipKind::FxBeat;
             sEntryHover.ptr       = &sKeyedHoverSentinel;
             sEntryHover.fxBeatIdx = a_fxBeat;
             sEntryHover.label     = ClipLabelWithSection(a_label ? a_label : "Shake");
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         }
 
         // Cinematic Effects creature-shake hover: a Dragon or Dwarven
@@ -2140,7 +2228,7 @@ namespace DietDrCamera
             using namespace ImGuiMCP;
             if (!a_amp || !a_speed || !a_range || !a_char) return;
             if (!a_ampFp || !a_speedFp || !a_rangeFp || !a_charFp) return;
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover = {};
             sEntryHover.kind      = EntryClipKind::CineSource;
             sEntryHover.ptr       = a_amp;
@@ -2154,7 +2242,7 @@ namespace DietDrCamera
             sEntryHover.cineCharFp  = a_charFp;
             sEntryHover.label     = ClipLabelWithSection(a_label ? a_label : "Shake");
             sEntryHover.binding = nullptr;
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         }
 
         // ---- Camera-bundle capture/apply helpers ----------------------------
@@ -2397,6 +2485,12 @@ namespace DietDrCamera
             if (!sEntryHover.binding || sEntryHover.bindingSection == SpecWeaponsSection::TargetLock) {
                 a_dst->transitionSetAimBias = a_src.transitionSetAimBias;
                 a_dst->transitionAimBias = a_src.transitionAimBias;
+                a_dst->transitionSetHeightBias = a_src.transitionSetHeightBias;
+                a_dst->transitionHeightBias = a_src.transitionHeightBias;
+                a_dst->transitionSetZoomBias = a_src.transitionSetZoomBias;
+                a_dst->transitionZoomBias = a_src.transitionZoomBias;
+                a_dst->transitionSetFOVBias = a_src.transitionSetFOVBias;
+                a_dst->transitionFOVBias = a_src.transitionFOVBias;
                 a_dst->transitionSetPitchBias = a_src.transitionSetPitchBias;
                 a_dst->transitionPitchBias = a_src.transitionPitchBias;
             }
@@ -3087,6 +3181,12 @@ namespace DietDrCamera
                     if (sEntryHover.bindingSection != SpecWeaponsSection::TargetLock) {
                         dst->transitionSetAimBias = previous.transitionSetAimBias;
                         dst->transitionAimBias = previous.transitionAimBias;
+                        dst->transitionSetHeightBias = previous.transitionSetHeightBias;
+                        dst->transitionHeightBias = previous.transitionHeightBias;
+                        dst->transitionSetZoomBias = previous.transitionSetZoomBias;
+                        dst->transitionZoomBias = previous.transitionZoomBias;
+                        dst->transitionSetFOVBias = previous.transitionSetFOVBias;
+                        dst->transitionFOVBias = previous.transitionFOVBias;
                         dst->transitionSetPitchBias = previous.transitionSetPitchBias;
                         dst->transitionPitchBias = previous.transitionPitchBias;
                         dst->SyncTransitionOverride();
@@ -3494,14 +3594,17 @@ namespace DietDrCamera
         static void HandleTabClipboard(const char* label, Build&& build)
         {
             using namespace ImGuiMCP;
-            const bool hovered = ImGui::IsItemHovered() || PadItemIsCursor();
+            const bool hovered = ClipboardItemHovered();
             ImGui::PushID(label);
             if (hovered && ImGui::IsMouseClicked(1)) ImGui::OpenPopup("##tab_clipboard");
             const bool popup = ImGui::IsPopupOpen("##tab_clipboard");
             if (hovered || popup) {
                 auto target = build();
                 if (!target.tabEntries.empty() || target.tabCollection != TabCollection::Entries) {
-                    if (hovered) sEntryHover = target;
+                    if (hovered) {
+                        sEntryHover = target;
+                        RecordClipboardHint(MenuControllerHints::ClipboardLabels::Tab);
+                    }
                     if (PadBeginPopupModal("##tab_clipboard", nullptr,
                             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize)) {
                         ImGui::Text("%s", label);
@@ -3555,7 +3658,7 @@ namespace DietDrCamera
                 const bool was  = sPrevKey[vk];
                 sPrevKey[vk] = down;
                 if (!down || was) continue;
-                const UINT sc = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+                const UINT sc = KeyboardScanCodeFromVirtualKey(static_cast<UINT>(vk));
                 if (sc == 0) continue;
                 if (s.entryCopyKey  != 0 && sc == s.entryCopyKey)  copyNow  = true;
                 if (s.entryPasteKey != 0 && sc == s.entryPasteKey) pasteNow = true;
@@ -3569,16 +3672,24 @@ namespace DietDrCamera
             } else {
                 sPrevPad = 0;
             }
-            if (pressed != 0) {
+            if (pressed != 0 && sPadScopeOn) {
+                // Navigation runs before clipboard polling. Do not apply a
+                // previous row's target after moving onto a non-copyable item
+                // (for example Target Lock's General tab).
+                const bool currentTarget = sPadHasCursor && sEntryHover.owner.itemID != 0 &&
+                    sEntryHover.owner.itemID == sPadCursorRect.id;
                 if ((s.entryCopyKey  & kInputGamepadTag) &&
-                    (pressed & (s.entryCopyKey  & 0xFFFFu))) copyNow  = true;
+                    (pressed & (s.entryCopyKey  & 0xFFFFu)) && currentTarget) copyNow  = true;
                 if ((s.entryPasteKey & kInputGamepadTag) &&
-                    (pressed & (s.entryPasteKey & 0xFFFFu))) pasteNow = true;
+                    (pressed & (s.entryPasteKey & 0xFFFFu)) && currentTarget) pasteNow = true;
             }
 
             // A binder is armed and waiting for the very next press â€” don't
             // also act on it, or binding Copy to a key would immediately copy.
             if (binding || resumed || ImGui::GetIO()->WantTextInput) return;
+            if (sKeyboardCursor && (copyNow || pasteNow) &&
+                (!sPadScopeOn || !sPadHasCursor || sEntryHover.owner.itemID == 0 ||
+                    sEntryHover.owner.itemID != sPadCursorRect.id)) return;
             if (copyNow)  EntryClipCopy();
             if (pasteNow) EntryClipPaste();
         }
@@ -3592,8 +3703,12 @@ namespace DietDrCamera
         static void PadNavSectionOn()
         {
             FeedGamepadNav();
-            TickEntryClipboardHotkeys(SettingsManager::GetSingleton());
-            sPadScopeOn = true;
+            sPadScopeOn = !sPadRenderingSection ||
+                (sPadCapture.IsPageFocused() && !sPadCapture.IsSidebar());
+            // Sidebar mode pauses controller actions, while mouse hover and
+            // keyboard clipboard shortcuts remain available on the page.
+            if (!sPadRenderingSection || sPadCapture.IsPageFocused())
+                TickEntryClipboardHotkeys(SettingsManager::GetSingleton());
         }
 
         static float* sRightDragTarget = nullptr;
@@ -3931,7 +4046,7 @@ namespace DietDrCamera
             // holding repeats (see FeedGamepadNav) â€” and A again releases.
             // Grab identity is value + rect so a second box showing the
             // same float doesn't also highlight/step (see sPadGrabRect).
-            if (sPadConnected && !editNumber) {
+            if (sMenuNavAvailable && !editNumber) {
                 const PadItem trackRect = PadCurrentItemRect();
                 auto grabbedHere = [&]() {
                     return sPadGrabValue == value && PadSameItem(trackRect, sPadGrabRect);
@@ -4005,7 +4120,7 @@ namespace DietDrCamera
             // A pad grab counts as "held" for both the thumb color and the
             // return value: while the track is grabbed the d-pad owns it, which
             // is the same relationship the mouse has while dragging.
-            const bool  padHeld  = sPadConnected && sPadGrabValue == value &&
+            const bool  padHeld  = sMenuNavAvailable && sPadGrabValue == value &&
                                    PadSameItem(PadItem{origin.x, origin.y,
                                                        origin.x + w, origin.y + h,
                                                        sPadRenderLayer, 0},
@@ -4071,6 +4186,18 @@ namespace DietDrCamera
         // (Camera Noise, Transitions, etc.) keep the original scaling.
         bool sCompactScale = false;
         bool sMediumScale  = false;
+        // Lets a compact pane enlarge its controls without the medium band's gaps.
+        float sCompactControlScale = 1.0f;
+        constexpr float kSliderResetFontScale = 1.1f;
+        constexpr float kExtrasTabFontScale = 1.5f;
+        float sSliderResetFontScale = kSliderResetFontScale;
+
+        struct SliderResetScaleScope
+        {
+            explicit SliderResetScaleScope(float scale) : previous(std::exchange(sSliderResetFontScale, scale)) {}
+            ~SliderResetScaleScope() { sSliderResetFontScale = previous; }
+            float previous;
+        };
         // When set, RenderSlider's LABEL (only) renders larger while the slider
         // track + value stay at the current band. Used by Base Settings to give
         // the transition slider labels more presence without resizing the bars.
@@ -4350,17 +4477,17 @@ namespace DietDrCamera
             currentGroup = g;
         }
         inline float ScaleLabel()  {
-            if (sCompactScale) return sBiggerLabel ? 1.70f : 1.10f;
+            if (sCompactScale) return (sBiggerLabel ? 1.70f : 1.10f) * sCompactControlScale;
             if (sMediumScale)  return 1.70f;
             return 2.4f;
         }
         inline float ScaleBody()   {
-            if (sCompactScale) return 1.0f;
+            if (sCompactScale) return sCompactControlScale;
             if (sMediumScale)  return 1.4f;
             return 2.0f;
         }
         inline float ScaleHelper() {
-            if (sCompactScale) return 0.85f;
+            if (sCompactScale) return 0.85f * sCompactControlScale;
             if (sMediumScale)  return 1.2f;
             return 1.7f;
         }
@@ -4714,6 +4841,8 @@ namespace DietDrCamera
                         std::snprintf(hlbl, sizeof(hlbl), "%s (%s)",
                                       a_hoverLabel ? a_hoverLabel : "Entry", EnvName(e));
                         MarkEntryHover(a_hoverKind, hp, hlbl);
+                        RecordClipboardHint(e == SettingsManager::kEnvIndoor ?
+                            MenuControllerHints::ClipboardLabels::Indoor : MenuControllerHints::ClipboardLabels::Outdoor);
                     }
                 }
             }
@@ -4729,7 +4858,7 @@ namespace DietDrCamera
             ImGui::GetItemRectMax(&labelMax);
             ImGui::GetCursorScreenPos(&cursor);
             ImGui::GetContentRegionAvail(&available);
-            ImGui::SetWindowFontScale(1.1f);
+            ImGui::SetWindowFontScale(sSliderResetFontScale * (sCompactScale ? sCompactControlScale : 1.0f));
             ImGui::CalcTextSize(&resetText, "Reset", nullptr, false, -1.0f);
             const float resetWidth = resetText.x + ImGui::GetStyle()->FramePadding.x * 2.0f;
             if (labelMax.x + Sx(16.0f) + resetWidth <= cursor.x + available.x)
@@ -4827,7 +4956,7 @@ namespace DietDrCamera
                     vk == VK_XBUTTON1 || vk == VK_XBUTTON2) continue;
                 if (down && !wasDown) {
                     if (vk == VK_ESCAPE) { s.categoriesShoulderSwapKey = 0; sShoulderCaptureActive = false; return; }
-                    const UINT sc = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+                    const UINT sc = KeyboardScanCodeFromVirtualKey(static_cast<UINT>(vk));
                     if (sc == 0) continue;
                     s.categoriesShoulderSwapKey = sc;
                     sShoulderCaptureActive = false;
@@ -4989,7 +5118,7 @@ namespace DietDrCamera
         // sliders that opens a popup with an enable toggle + the 5 transition
         // speed sliders, stored on this profile (routed through EditTarget so it
         // follows the Indoor/Outdoor edit toggle like the other sliders).
-        // a_showAimBias adds the Aim Bias Override row at the bottom of the
+        // a_showAimBias adds Aim Bias and the four proximity bias rows to the
         // popup. TARGET LOCK ONLY (user, 2026-09-07) — aim bias is lock-on
         // centring, so on a Third Person entry the row would be a control that
         // does nothing wherever it appears. The field is on every profile; only
@@ -5070,10 +5199,13 @@ namespace DietDrCamera
                     // profile, and that wins over the entry's while locked onto
                     // them — one control, two layers, no second slider.
                     { "Aim Bias",       &edit->transitionAimBias,   0.0f,  1.5f, 0.01f, 1.0f, &edit->transitionSetAimBias },
+                    { "Height Bias",    &edit->transitionHeightBias, -1.5f, 1.5f, 0.01f, 0.0f, &edit->transitionSetHeightBias },
+                    { "Zoom Bias",      &edit->transitionZoomBias, -1.5f, 1.5f, 0.01f, 0.0f, &edit->transitionSetZoomBias },
+                    { "FOV Bias",       &edit->transitionFOVBias, -1.5f, 1.5f, 0.01f, 0.0f, &edit->transitionSetFOVBias },
                     { "Pitch Bias",     &edit->transitionPitchBias, -1.5f, 1.5f, 0.01f, 0.0f, &edit->transitionSetPitchBias },
                 };
                 RenderTransitionSliderList("##entry_trans_grid", entryTrans,
-                                           a_showAimBias ? 9 : 7);
+                                           a_showAimBias ? static_cast<int>(std::size(entryTrans)) : 7);
                 // The master mirrors the seven every frame â€” the runtime gates
                 // and the amber button both still read transitionOverride.
                 edit->SyncTransitionOverride();
@@ -5089,6 +5221,12 @@ namespace DietDrCamera
                     edit->transitionAimBias   = 1.0f;
                     edit->SetTransitionAll(false);
                     edit->transitionSetAimBias = false;   // not part of SetTransitionAll
+                    edit->transitionHeightBias = 0.0f;
+                    edit->transitionSetHeightBias = false;
+                    edit->transitionZoomBias = 0.0f;
+                    edit->transitionSetZoomBias = false;
+                    edit->transitionFOVBias = 0.0f;
+                    edit->transitionSetFOVBias = false;
                     edit->transitionPitchBias = 0.0f;
                     edit->transitionSetPitchBias = false;
                     edit->SyncTransitionOverride();
@@ -5910,11 +6048,10 @@ namespace DietDrCamera
 
                 ImVec2 avail;
                 ImGui::GetContentRegionAvail(&avail);
-                // Exactly what PopupCornerButtons draws: a 12px gap and one
-                // button row. Reserving twice that left a band of dead black
-                // under the buttons.
-                const float footerH = PopupFooterHeight();
-                const float bodyH   = (std::max)(avail.y - footerH, avail.y * 0.4f);
+                // Keep the action buttons and hints inside the popup's fixed
+                // height; only the list/settings panes give up footer space.
+                const float footerH = PopupFooterHeight() + MenuPopupHintBar::ReservedHeight();
+                const float bodyH   = (std::max)(4.0f, avail.y - footerH);
                 const float listW   = (std::max)(avail.x * 0.26f, Sx(200.0f));
 
                 // The LIST selects for viewing only â€” it must never arm.
@@ -5998,6 +6135,7 @@ namespace DietDrCamera
                 } else if (btn == 2) {
                     ImGui::CloseCurrentPopup();
                 }
+                sLocationHintBar.Create(sPadRenderLayer);
                 PadEndPopup();
             }
             ImGui::PopID();
@@ -6584,22 +6722,14 @@ namespace DietDrCamera
                 return XInputGetState(0, &xs) == ERROR_SUCCESS &&
                        (xs.Gamepad.wButtons & bit) != 0;
             }
-            // Keyboard: `enc` is a DIK scancode, stored by the hotkey binder as
-            // MapVirtualKey(vk, VK_TO_VSC) of whatever vk was pressed (see the
-            // capture loop). The reverse map (VSC_TO_VK) is LOSSY for scancodes
-            // shared by two keys â€” notably the numpad/navigation pair: Keypad 9
-            // and Page Up BOTH map to scancode 0x49. So GetAsyncKeyState(
-            // VSC_TO_VK(enc)) can watch the wrong virtual key and never see the
-            // press. That's why a paddle bound to Keypad 9 OPENED Quick Tune (the
-            // event sink matches by scancode) but couldn't CLOSE it (this poll
-            // watched the other spelling of the key). Match the binder's own
-            // direction instead: any currently-down vk whose VK_TO_VSC == enc.
-            // Clean round-trip; covers both spellings of shared scancodes.
+            // Use the same extended DirectInput mapping as the binders and
+            // Skyrim input events. Navigation keys must never match numpad
+            // bindings merely because their low scan-code byte is shared.
             for (int vk = 0x07; vk < 256; ++vk) {
                 if (vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON ||
                     vk == VK_XBUTTON1 || vk == VK_XBUTTON2) continue;
                 if ((GetAsyncKeyState(vk) & 0x8000) == 0) continue;
-                if (MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC) == enc)
+                if (KeyboardScanCodeFromVirtualKey(static_cast<UINT>(vk)) == enc)
                     return true;
             }
             return false;
@@ -6633,6 +6763,18 @@ namespace DietDrCamera
     {
         CameraEffectClock::Sync();
         EnsureMenuUiScale();
+        // External launchers can mutate IsOpen directly, without kOpenMenu /
+        // kCloseMenu. Keep pad ownership, state holding and preferences aligned
+        // with the real window. Older frameworks retain the event fallback.
+        if (const auto open = MenuFrameworkBinding::MainWindowOpen()) {
+            const bool wasOpen = sPadPanelOpen.exchange(*open,std::memory_order_relaxed);
+            if (wasOpen && !*open) sPadCaptureResetRequested.store(true,std::memory_order_relaxed);
+        }
+        static bool wasEditorOpen = false;
+        const bool editorOpen = sPadPanelOpen.load(std::memory_order_relaxed) ||
+            (sQuickTuneWindow && sQuickTuneWindow->IsOpen.load());
+        if (wasEditorOpen && !editorOpen) SettingsManager::GetSingleton().Save();
+        wasEditorOpen = editorOpen;
         // Disarm the Quick Tune reopen suppressor once the hotkey is
         // physically up. The input sink only ever fires while the key
         // is DOWN, so without this per-frame check the latch stayed
@@ -6755,21 +6897,21 @@ namespace DietDrCamera
         }
 
         SKSEMenuFramework::SetSection("Diet Dr Camera");
-        SKSEMenuFramework::AddSectionItem("Presets",          RenderPresets);
+        SKSEMenuFramework::AddSectionItem("Presets",          [] { RenderControllerSection(RenderPresets); });
         // Base Settings â€” Camera Collision and Transitions share a single
         // section with a tab strip. Functionally distinct controls but
         // they both shape how the camera moves between states.
-        SKSEMenuFramework::AddSectionItem("Base Settings",    RenderCinematics);
-        SKSEMenuFramework::AddSectionItem("Third Person",     RenderCategories);
-        SKSEMenuFramework::AddSectionItem("Target Lock",      RenderTargetLock);
+        SKSEMenuFramework::AddSectionItem("Base Settings",    [] { RenderControllerSection(RenderCinematics); });
+        SKSEMenuFramework::AddSectionItem("Third Person",     [] { RenderControllerSection(RenderCategories); });
+        SKSEMenuFramework::AddSectionItem("Target Lock",      [] { RenderControllerSection(RenderTargetLock); });
         // Camera Noise gets its own section â€” used to live as a tab
         // inside Cinematics, but with the v3 state-keyed redesign it
         // has enough surface (Global + 11 Categories tabs) to warrant
         // top-level placement.
-        SKSEMenuFramework::AddSectionItem("Camera Noise",     RenderCameraNoise);
-        SKSEMenuFramework::AddSectionItem("Dialogue",         RenderDialogue);
-        SKSEMenuFramework::AddSectionItem("First Person",     RenderFirstPerson);
-        SKSEMenuFramework::AddSectionItem("Extras",           RenderExtras);
+        SKSEMenuFramework::AddSectionItem("Camera Noise",     [] { RenderControllerSection(RenderCameraNoise); });
+        SKSEMenuFramework::AddSectionItem("Dialogue",         [] { RenderControllerSection(RenderDialogue); });
+        SKSEMenuFramework::AddSectionItem("First Person",     [] { RenderControllerSection(RenderFirstPerson); });
+        SKSEMenuFramework::AddSectionItem("Extras",           [] { RenderControllerSection(RenderExtras); });
         // Information section removed 2026-08-15 (user request).
         // RenderInformation stays in the TU for quick re-enable.
         // Debug section intentionally not registered (dev-only; RenderDebug
@@ -7822,20 +7964,8 @@ namespace DietDrCamera
             sTlPadTabs.Begin();
             // General â€” sliders + Reset All
             const bool generalActive = sTlPadTabs.Item("General");
-            HandleTabClipboard("General", [&] {
-                auto tab = NewTabTarget("General");
-                const auto add = [&](const char* key, float& value) {
-                    EntryHoverTarget child;
-                    child.kind = EntryClipKind::Scalar;
-                    child.ptr = &value;
-                    AddTabTarget(tab, key, std::move(child), 0);
-                };
-                add("Target Lock/Aim Bias", s.targetLockAimBias);
-                add("Target Lock/Looseness", s.targetLockTrackSeconds);
-                add("Target Lock/Acquire Duration", s.targetLockAcquireSwingSeconds);
-                add("Target Lock/Switch Speed", s.targetLockSwitchSpeed);
-                return tab;
-            });
+            // General is deliberately not a clipboard target or context menu.
+            if (ClipboardItemHovered()) sEntryHover = {};
             if (generalActive) { sActiveTab = 0; ImGui::EndTabItem(); }
             // 8 category tabs
             for (int i = 0; i < (int)tabs.size(); ++i) {
@@ -9393,6 +9523,14 @@ namespace DietDrCamera
             case 0x3E: return "F4";  case 0x3F: return "F5";  case 0x40: return "F6";
             case 0x41: return "F7";  case 0x42: return "F8";  case 0x43: return "F9";
             case 0x44: return "F10"; case 0x57: return "F11"; case 0x58: return "F12";
+            case 0x47: return "Numpad 7"; case 0x48: return "Numpad 8"; case 0x49: return "Numpad 9";
+            case 0x4B: return "Numpad 4"; case 0x4C: return "Numpad 5"; case 0x4D: return "Numpad 6";
+            case 0x4F: return "Numpad 1"; case 0x50: return "Numpad 2"; case 0x51: return "Numpad 3";
+            case 0x52: return "Numpad 0"; case 0x53: return "Numpad .";
+            case 0x9C: return "Numpad Enter";
+            case 0xC7: return "Home"; case 0xC9: return "Page Up";
+            case 0xCF: return "End"; case 0xD1: return "Page Down";
+            case 0xD2: return "Insert"; case 0xD3: return "Delete";
             case 0xC8: return "Up";  case 0xCB: return "Left"; case 0xCD: return "Right";
             case 0xD0: return "Down";
             default: {
@@ -9401,6 +9539,52 @@ namespace DietDrCamera
                 return std::string(buf);
             }
             }
+        }
+
+        static void PadRenderHints()
+        {
+            using namespace ImGuiMCP;
+            auto* panel = sPadCapture.FocusedPanelWindow();
+            if (!panel) return;
+            auto* footer = sLocationHintBar.WindowForFrame();
+            if (!footer) footer = sPadCapture.HintBarWindow();
+            if (!footer && !sKeyboardHints) return;
+            MenuControllerHints::Context context;
+            context.keyboard = sKeyboardHints;
+            const auto* controls = RE::ControlMap::GetSingleton();
+            context.playStation = controls && controls->GetGamePadType() == RE::PC_GAMEPAD_TYPE::kOrbis;
+            int topLayer = 0;
+            for (int i = 0; i < sPadItemN; ++i) topLayer = std::max(topLayer, sPadItems[i].layer);
+            int tabs = 0;
+            for (int i = 0; i < sPadItemN; ++i)
+                if (sPadItems[i].layer == topLayer && sPadItems[i].tab) ++tabs;
+            context.tabs = tabs > 1;
+            using Mode = MenuControllerHints::Mode;
+            const int frame = ImGui::GetFrameCount();
+            if (frame - sPadHotkeyCaptureFrame <= 1 || frame == sPadHintBindingFrame) context.mode = Mode::Binding;
+            else if (ImGui::GetIO()->WantTextInput) context.mode = Mode::TextInput;
+            else if (sPadGrabValue) context.mode = Mode::Slider;
+            else if (topLayer > 0) context.mode = Mode::Popup;
+            else if (sPadCapture.IsSidebar()) context.mode = Mode::Sidebar;
+            const auto& settings = SettingsManager::GetSingleton();
+            const auto keyName = [&](std::uint32_t code) {
+                if (!code) return std::string{};
+                const bool gamepad = (code & kInputGamepadTag) != 0;
+                auto name = MenuControllerHints::BindingName(DXScanCodeName(code), gamepad, context.playStation);
+                return context.keyboard && gamepad ? "Pad " + name : name;
+            };
+            context.copy = keyName(settings.entryCopyKey);
+            context.paste = keyName(settings.entryPasteKey);
+            context.clipboardHasContents = sEntryClip.kind != EntryClipKind::None;
+            context.quickTune = keyName(settings.quickTuneHotkey);
+            if (sMenuNavAvailable && sPadHasCursor && !sPadCapture.IsSidebar() &&
+                (!sKeyboardHints || sKeyboardCursor))
+                context.clipboardSubject = sClipboardHintHover.Resolve(frame, sPadCursorRect,
+                    std::span<const PadItem>(sPadItems, sPadItemN), topLayer);
+            else if (sKeyboardHints && frame == sEntryHover.owner.frame && sEntryHover.kind != EntryClipKind::None)
+                context.clipboardSubject = ClipboardHintSubject(sEntryHover.kind);
+            if (footer) DrawMenuControllerHintBar(footer, context);
+            else DrawMenuKeyboardHintBar(panel, context);
         }
 
         // Compact slider for the dialogue preset editor. The default
@@ -9530,7 +9714,7 @@ namespace DietDrCamera
                         else                     s.dialogueCyclePrevKey = 0;
                         sCaptureTarget = 0; break;
                     }
-                    const UINT sc = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+                    const UINT sc = KeyboardScanCodeFromVirtualKey(static_cast<UINT>(vk));
                     if (sc == 0) continue;
                     if (sCaptureTarget == 1) s.dialogueCycleNextKey = sc;
                     else                     s.dialogueCyclePrevKey = sc;
@@ -10138,13 +10322,11 @@ namespace DietDrCamera
                     }
                     PadNavEndChild();
 
-                    // Remove NPC stays visible at all times; it only grays out
-                    // (and the pad skips it) until an NPC is selected, so the
-                    // column layout doesn't shift when you pick/clear a target.
+                    // Show Remove only for a selected NPC. Reserve its height
+                    // while hidden so selecting a target keeps the list stable.
                     ImGui::Dummy(ImVec2(0, Sx(14.0f)));
                     const bool canRemoveNpc = (sSelectedNpcFormID != 0);
-                    if (!canRemoveNpc) PadBeginDisabled();
-                    if (PadButton("Remove NPC", ImVec2(-1, 0)) && canRemoveNpc) {
+                    if (canRemoveNpc && PadButton("Remove NPC", ImVec2(-1, 0))) {
                         const auto fid = sSelectedNpcFormID;
                         const auto plug = sSelectedNpcPlugin;
                         const int oldActive = bucket.activeIndex;
@@ -10163,7 +10345,7 @@ namespace DietDrCamera
                             bucket.activeIndex = bucket.looks.empty() ? -1 : 0;
                         }
                     }
-                    if (!canRemoveNpc) PadEndDisabled();
+                    if (!canRemoveNpc) ImGui::Dummy(ImVec2(0, ImGui::GetFrameHeight()));
 
                     // ---- Column 2: presets for the selected NPC ----
                     ImGui::TableSetColumnIndex(1);
@@ -10241,15 +10423,14 @@ namespace DietDrCamera
                         }
                         PadNavEndChild();
 
-                        // Delete Preset stays visible; grayed (and pad-skipped)
-                        // until a preset row is selected, so the column keeps a
-                        // stable layout whether or not a preset is highlighted.
+                        // Show Delete only for a selected preset of this NPC.
                         ImGui::Dummy(ImVec2(0, Sx(14.0f)));
                         const bool canDeletePreset =
                             (sSelectedLookIdx >= 0 &&
-                             sSelectedLookIdx < static_cast<int>(bucket.looks.size()));
-                        if (!canDeletePreset) PadBeginDisabled();
-                        if (PadButton("Delete Preset", ImVec2(-1, 0)) && canDeletePreset) {
+                             sSelectedLookIdx < static_cast<int>(bucket.looks.size()) &&
+                             bucket.looks[sSelectedLookIdx].targetFormID == sSelectedNpcFormID &&
+                             bucket.looks[sSelectedLookIdx].targetPluginName == sSelectedNpcPlugin);
+                        if (canDeletePreset && PadButton("Delete Preset", ImVec2(-1, 0))) {
                             bucket.looks.erase(bucket.looks.begin() + sSelectedLookIdx);
                             CameraController::InvalidateProfileReferences();
                             if (bucket.activeIndex == sSelectedLookIdx) {
@@ -10259,7 +10440,7 @@ namespace DietDrCamera
                             }
                             sSelectedLookIdx = -1;
                         }
-                        if (!canDeletePreset) PadEndDisabled();
+                        if (!canDeletePreset) ImGui::Dummy(ImVec2(0, ImGui::GetFrameHeight()));
                     } else {
                         // Grayed-out preview of the presets column so the layout
                         // matches the bound state (Add Preset button + presets
@@ -10275,10 +10456,9 @@ namespace DietDrCamera
                         if (PadNavBeginChild("##npc_presets", ImVec2(0, npcPresetsBoxH), ImGuiChildFlags_Border, ImGuiWindowFlags_NavFlattened)) {
                         }
                         PadNavEndChild();
-                        // Keep Delete Preset shown (grayed) here too so the
-                        // column matches the bound state's layout exactly.
+                        // Reserve the hidden Delete button's footer space.
                         ImGui::Dummy(ImVec2(0, Sx(14.0f)));
-                        PadButton("Delete Preset", ImVec2(-1, 0));
+                        ImGui::Dummy(ImVec2(0, ImGui::GetFrameHeight()));
                         PadEndDisabled();
                     }
 
@@ -10513,7 +10693,7 @@ namespace DietDrCamera
                     vk == VK_XBUTTON1 || vk == VK_XBUTTON2) continue;
                 if (down && !was) {
                     if (vk == VK_ESCAPE) { *a_key = 0; sActiveId = nullptr; break; }
-                    const UINT sc = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+                    const UINT sc = KeyboardScanCodeFromVirtualKey(static_cast<UINT>(vk));
                     if (sc == 0) continue;
                     *a_key = sc; sActiveId = nullptr; break;
                 }
@@ -10555,6 +10735,16 @@ namespace DietDrCamera
     // as Cinematics: each tab dispatches to a render function or inline
     // block.
     // =====================================================================
+    static void RenderPovSectionHeader(const char* label, float bodyScale = 1.05f)
+    {
+        using namespace ImGuiMCP;
+        ImGui::Dummy(ImVec2(0, Sx(10.0f)));
+        ImGui::SetWindowFontScale(1.45f);
+        ImGui::SeparatorText(label);
+        ImGui::SetWindowFontScale(bodyScale);
+        ImGui::Dummy(ImVec2(0, Sx(4.0f)));
+    }
+
     void __stdcall MenuUI::RenderExtras()
     {
         using namespace ImGuiMCP;
@@ -10564,7 +10754,7 @@ namespace DietDrCamera
         EnsureMenuUiScale();
         auto& s = SettingsManager::GetSingleton();
 
-        ImGui::SetWindowFontScale(1.5f);
+        ImGui::SetWindowFontScale(kExtrasTabFontScale);
         const ImGuiTabBarFlags kTabFlags =
             ImGuiTabBarFlags_FittingPolicyScroll |
             ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
@@ -10575,50 +10765,40 @@ namespace DietDrCamera
             // so labels don't inherit the per-tab content's larger scale.
 
             if (sExtrasPadTabs.Item("Projectile Tracing")) {
-                // Same widget + body scale as the dialogue Global tab
-                // (user request 2026-08-15).
-                ImGui::SetWindowFontScale(1.4f);
-                // 10px like the Death Camera tab â€” the toggles sit right
-                // under the tab strip (user request 2026-08-15).
-                ImGui::Dummy(ImVec2(0, Sx(10.0f)));
-                // Toggles at the Menus tab's effective checkbox scale
-                // (1.5 parent x 1.4 child = 2.1) â€” user request 2026-08-15.
-                ImGui::SetWindowFontScale(2.1f);
-                PadCheckbox("Enable For Bows and Crossbows", &s.archeryTracingEnabled);
-                ImGui::Dummy(ImVec2(0, Sx(8.0f)));
-                PadCheckbox("Enable For Spells and Staves", &s.spellTracingEnabled);
-                ImGui::SetWindowFontScale(1.4f);
-                ImGui::Dummy(ImVec2(0, Sx(12.0f)));
-
-                if (s.archeryTracingEnabled || s.spellTracingEnabled) {
-                    ImGui::Separator();
-                    ImGui::Dummy(ImVec2(0, Sx(8.0f)));
-                    ImGui::Text("Reticle");
-                    ImGui::Dummy(ImVec2(0, Sx(4.0f)));
-                    RenderCompactSlider("Size", &s.projectileReticleSizeScale,
-                                        0.5f, 5.0f, 0.05f, 1.0f);
+                // Cinematic Effects' child inherits the Extras host's font scale.
+                // Match that effective Reset size in these direct host tabs.
+                SliderResetScaleScope resetScale(kSliderResetFontScale * kExtrasTabFontScale);
+                sMediumScale = true;
+                const auto renderView = [&](const char* label, const char* scope,
+                    bool& archery, bool& spells, float& size, float& thickness, float& eyeX, float& eyeY) {
+                    RenderPovSectionHeader(label, 1.4f);
+                    ImGui::PushID(scope);
+                    ImGui::SetWindowFontScale(2.1f);
+                    PadCheckbox("Enable For Bows and Crossbows", &archery);
+                    PadCheckbox("Enable For Spells and Staves", &spells);
                     ImGui::SetWindowFontScale(1.4f);
-                    RenderCompactSlider("Thickness", &s.projectileReticleThickness,
-                                        1.0f, 10.0f, 0.1f, 2.0f);
-                    ImGui::SetWindowFontScale(1.4f);
-                    ImGui::Dummy(ImVec2(0, Sx(12.0f)));
-                }
-                if (s.archeryTracingEnabled) {
-                    ImGui::Text("Sneak Eye Position");
-                    ImGui::Dummy(ImVec2(0, Sx(4.0f)));
-                    RenderCompactSlider("Sneak Eye X", &s.sneakMeterOffsetX,
-                                        -1500.0f, 1500.0f, 10.0f, -500.0f);
-                    ImGui::SetWindowFontScale(1.4f);
-                    RenderCompactSlider("Sneak Eye Y", &s.sneakMeterOffsetY,
-                                        -800.0f, 800.0f, 10.0f, -100.0f);
-                    ImGui::SetWindowFontScale(1.4f);
-                }
+                    if (archery || spells) {
+                        ImGui::Dummy(ImVec2(0, Sx(6.0f)));
+                        RenderSlider("Reticle Size", &size, 0.5f, 5.0f, 0.05f, 1.0f);
+                        RenderSlider("Reticle Thickness", &thickness, 1.0f, 10.0f, 0.1f, 2.0f);
+                        RenderSlider("Sneak Eye X", &eyeX, -1500.0f, 1500.0f, 10.0f, -500.0f);
+                        RenderSlider("Sneak Eye Y", &eyeY, -800.0f, 800.0f, 10.0f, -100.0f);
+                    }
+                    ImGui::PopID();
+                };
+                renderView("Third Person", "tracing_tp", s.archeryTracingEnabled, s.spellTracingEnabled,
+                    s.projectileReticleSizeScale, s.projectileReticleThickness, s.sneakMeterOffsetX, s.sneakMeterOffsetY);
+                auto& fp = s.projectileTracingFp;
+                renderView("First Person", "tracing_fp", fp.archeryEnabled, fp.spellEnabled,
+                    fp.reticleSize, fp.reticleThickness, fp.sneakEyeX, fp.sneakEyeY);
+                sMediumScale = false;
                 ImGui::EndTabItem();
             }
-            ImGui::SetWindowFontScale(1.5f);
+            ImGui::SetWindowFontScale(kExtrasTabFontScale);
 
 
             if (sExtrasPadTabs.Item("Death Camera")) {
+                SliderResetScaleScope resetScale(kSliderResetFontScale * kExtrasTabFontScale);
                 // Medium scale (sMediumScale) so the SLIDERS render compact â€”
                 // RenderSlider ignores the window font scale and sizes itself
                 // from sMediumScale/sCompactScale. This keeps every control,
@@ -10675,7 +10855,7 @@ namespace DietDrCamera
                                 vk == VK_XBUTTON1 || vk == VK_XBUTTON2) continue;
                             if (down && !wasDown) {
                                 if (vk == VK_ESCAPE) { s.deathCameraSkipKey = 0; sSkipCaptureActive = false; break; }
-                                const UINT sc = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+                                const UINT sc = KeyboardScanCodeFromVirtualKey(static_cast<UINT>(vk));
                                 if (sc == 0) continue;
                                 s.deathCameraSkipKey = sc;
                                 sSkipCaptureActive = false;
@@ -10745,9 +10925,10 @@ namespace DietDrCamera
                 sMediumScale = false;
                 ImGui::EndTabItem();
             }
-            ImGui::SetWindowFontScale(1.5f);
+            ImGui::SetWindowFontScale(kExtrasTabFontScale);
 
             if (sExtrasPadTabs.Item("Ragdoll Camera")) {
+                SliderResetScaleScope resetScale(kSliderResetFontScale * kExtrasTabFontScale);
                 // Mirrors the Death Camera tab. Applies when a recoverable ragdoll
                 // (Unrelenting Force, paralysis, â€¦) routes the player through the
                 // bleedout camera â€” free look + slow motion, but no load-save prompt.
@@ -10780,7 +10961,7 @@ namespace DietDrCamera
                 sMediumScale = false;
                 ImGui::EndTabItem();
             }
-            ImGui::SetWindowFontScale(1.5f);
+            ImGui::SetWindowFontScale(kExtrasTabFontScale);
 
             if (sExtrasPadTabs.Item("Vanity Camera")) {
                 // Same scale as the Ragdoll Camera tab (user request
@@ -10804,19 +10985,19 @@ namespace DietDrCamera
                 sMediumScale = false;
                 ImGui::EndTabItem();
             }
-            ImGui::SetWindowFontScale(1.5f);
+            ImGui::SetWindowFontScale(kExtrasTabFontScale);
 
             if (sExtrasPadTabs.Item("Menus")) {
                 RenderShowPlayerInMenus();
                 ImGui::EndTabItem();
             }
-            ImGui::SetWindowFontScale(1.5f);
+            ImGui::SetWindowFontScale(kExtrasTabFontScale);
 
             if (sExtrasPadTabs.Item("Cinematic Effects")) {
                 RenderCinematicEffectsContent();
                 ImGui::EndTabItem();
             }
-            ImGui::SetWindowFontScale(1.5f);
+            ImGui::SetWindowFontScale(kExtrasTabFontScale);
 
             sExtrasPadTabs.End();
             ImGui::EndTabBar();
@@ -11177,7 +11358,7 @@ namespace DietDrCamera
                     vk == VK_XBUTTON1 || vk == VK_XBUTTON2) continue;
                 if (down && !wasDown) {
                     if (vk == VK_ESCAPE) { s.quickTuneHotkey = 0; sQTCaptureActive = false; break; }
-                    const UINT sc = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+                    const UINT sc = KeyboardScanCodeFromVirtualKey(static_cast<UINT>(vk));
                     if (sc == 0) continue;
                     s.quickTuneHotkey = sc;
                     sQTCaptureActive = false;
@@ -11221,6 +11402,7 @@ namespace DietDrCamera
                 ? xs.Gamepad.wButtons : 0;
             sQTCaptureActive = true;
         }
+        if (sQTCaptureActive) sPadHintBindingFrame = ImGui::GetFrameCount();
         ImGui::PopID();
     }
 
@@ -11447,28 +11629,11 @@ namespace DietDrCamera
         // loaded preset's name and description are always on the right (user
         // ruling 2026-08-14). The description buffer reloads from disk
         // whenever the SHOWN preset changes.
-        static int         sSelectedPresetIdx     = -1;
+        static PresetSelection sPresetSelection;
         static std::string sSelectedPresetName;
         static char        sDescBuf[1024]         = {};
 
-        if (sSelectedPresetIdx >= static_cast<int>(presets.size())) sSelectedPresetIdx = -1;
-
-        int shownIdx = sSelectedPresetIdx;
-        if (shownIdx < 0) {
-            for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
-                if (presets[i] == s.activePresetName) { shownIdx = i; break; }
-            }
-        }
-        const std::string newName = (shownIdx >= 0)
-            ? presets[shownIdx]
-            : std::string();
-        if (newName != sSelectedPresetName) {
-            sSelectedPresetName = newName;
-            const auto desc = sSelectedPresetName.empty()
-                ? std::string()
-                : pm.GetDescription(sSelectedPresetName);
-            std::snprintf(sDescBuf, sizeof(sDescBuf), "%s", desc.c_str());
-        }
+        int shownIdx = sPresetSelection.Resolve(presets, s.activePresetName);
 
         // 38 / 62 stretch split â€” more room for the preset list so longer
         // names don't clip against the column edge at smaller resolutions.
@@ -11507,16 +11672,18 @@ namespace DietDrCamera
                         const bool pushedCol = presetColor(
                             preset, isActive, *ImGui::GetStyleColorVec4(ImGuiCol_Text), rowCol);
                         if (pushedCol) ImGui::PushStyleColor(ImGuiCol_Text, rowCol);
-                        const bool selectableClicked = PadSelectable(label.c_str(), sSelectedPresetIdx == i, 0, ImVec2(0, 0));
+                        const bool selectableClicked = PadSelectable(label.c_str(), shownIdx == i, 0, ImVec2(0, 0));
                         if (pushedCol) ImGui::PopStyleColor();
                         if (selectableClicked) {
                             // Activating a row LOADS it, immediately â€” no
                             // separate Load button, no confirm, and no
                             // toggle-off (a second press must never hide the
                             // detail card). User ruling 2026-08-14.
-                            sSelectedPresetIdx = i;
-                            if (pm.LoadPreset(preset)) setStatus("Loaded preset: " + preset);
-                            else                       setStatus(pm.LastError());
+                            // Reselecting the active row restores its latest save.
+                            sPresetSelection.Select(preset);
+                            if (pm.LoadPreset(preset)) {
+                                setStatus("Loaded preset: " + preset);
+                            } else setStatus(pm.LastError());
                         }
                         ImGui::PopID();
                     }
@@ -11525,6 +11692,15 @@ namespace DietDrCamera
             PadNavEndChild();
 
             // ----- Right: detail card for the selected preset -----
+            // Resolve after row input too, so actions and description use this
+            // frame's selection. Failed loads can still be inspected/deleted.
+            shownIdx = sPresetSelection.Resolve(presets, s.activePresetName);
+            const std::string newName = shownIdx >= 0 ? presets[shownIdx] : std::string();
+            if (newName != sSelectedPresetName) {
+                sSelectedPresetName = newName;
+                const auto desc = newName.empty() ? std::string() : pm.GetDescription(newName);
+                std::snprintf(sDescBuf, sizeof(sDescBuf), "%s", desc.c_str());
+            }
             ImGui::TableSetColumnIndex(1);
             ImGui::Dummy(ImVec2(0, Sx(4.0f)));
 
@@ -11541,10 +11717,10 @@ namespace DietDrCamera
                 // preset always resets back to presentation mode so the user
                 // never lands inside a stray edit session.
                 static bool sEditing    = false;
-                static int  sEditingFor = -1;
-                if (sEditingFor != shownIdx) {
+                static std::string sEditingFor;
+                if (sEditingFor != preset) {
                     sEditing    = false;
-                    sEditingFor = shownIdx;
+                    sEditingFor = preset;
                 }
 
                 // Name buffer is shared across both modes so a rename in
@@ -11617,12 +11793,8 @@ namespace DietDrCamera
                                 // Track the renamed preset so the user keeps
                                 // their selection instead of being dumped to
                                 // the empty-state pane.
-                                auto refreshed = pm.ListPresets();
-                                int newIdx = -1;
-                                for (int i = 0; i < static_cast<int>(refreshed.size()); ++i) {
-                                    if (refreshed[i] == typed) { newIdx = i; break; }
-                                }
-                                sSelectedPresetIdx  = newIdx;
+                                sPresetSelection.Select(typed);
+                                sEditingFor = typed;
                                 sSelectedPresetName = typed;
                                 sLastNameForName    = typed;  // keep tracker in sync with the new name
                                 std::snprintf(sNameBuf, sizeof(sNameBuf), "%s", typed.c_str());
@@ -11647,12 +11819,8 @@ namespace DietDrCamera
                             if (pm.RenamePreset(preset, typed)) {
                                 setStatus("Renamed '" + preset + "' to '" + typed + "'.");
                                 resolvedName = typed;
-                                auto refreshed = pm.ListPresets();
-                                int newIdx = -1;
-                                for (int i = 0; i < static_cast<int>(refreshed.size()); ++i) {
-                                    if (refreshed[i] == typed) { newIdx = i; break; }
-                                }
-                                sSelectedPresetIdx  = newIdx;
+                                sPresetSelection.Select(typed);
+                                sEditingFor = typed;
                                 sSelectedPresetName = typed;
                                 sLastNameForName    = typed;
                                 std::snprintf(sNameBuf, sizeof(sNameBuf), "%s", typed.c_str());
@@ -11720,7 +11888,6 @@ namespace DietDrCamera
                         const ImVec2 btnSize(btnW, 0);
                         if (PadButton("Update", btnSize)) {
                             if (pm.UpdatePreset(preset)) {
-                                SettingsManager::GetSingleton().Save();
                                 setStatus("Updated Preset: " + preset);
                             } else {
                                 setStatus(pm.LastError());
@@ -11822,6 +11989,7 @@ namespace DietDrCamera
                     ? xs.Gamepad.wButtons : 0;
                 sShoulderCaptureActive = true;
             }
+            if (sShoulderCaptureActive) sPadHintBindingFrame = ImGui::GetFrameCount();
             ImGui::PopID();
         }
         hotkeyDesc("Globally swaps Side Offset to the opposite.");
@@ -11843,7 +12011,7 @@ namespace DietDrCamera
                         vk == VK_XBUTTON1 || vk == VK_XBUTTON2) continue;
                     if (down && !wasDown) {
                         if (vk == VK_ESCAPE) { s.presetCycleNextKey = 0; sCycleCaptureActive = false; break; }
-                        const UINT sc = MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+                        const UINT sc = KeyboardScanCodeFromVirtualKey(static_cast<UINT>(vk));
                         if (sc == 0) continue;
                         s.presetCycleNextKey = sc;
                         sCycleCaptureActive = false;
@@ -11887,6 +12055,7 @@ namespace DietDrCamera
                     ? xs.Gamepad.wButtons : 0;
                 sCycleCaptureActive = true;
             }
+            if (sCycleCaptureActive) sPadHintBindingFrame = ImGui::GetFrameCount();
             ImGui::PopID();
         }
         hotkeyDesc("Loads the next preset in the list of Saved Presets.");
@@ -11924,9 +12093,6 @@ namespace DietDrCamera
                 if (name.empty()) {
                     setStatus("Enter a name first.");
                 } else if (pm.SavePreset(name)) {
-                    // Persist the live global config too (loaded on launch), so the
-                    // new preset's settings survive a relaunch (matches Quick Tune).
-                    SettingsManager::GetSingleton().Save();
                     setStatus("Saved preset: " + name);
                     sNewPresetName[0] = '\0';
                     ImGui::CloseCurrentPopup();
@@ -11948,6 +12114,7 @@ namespace DietDrCamera
             const int b = PopupCornerButtons("Confirm##reset", "Cancel##reset");
             if (b == 1) {
                 s.ResetAllToVanilla();
+                s.Save();
                 setStatus("All settings reset to default.");
                 ImGui::CloseCurrentPopup();
             } else if (b == 2) {
@@ -13086,8 +13253,8 @@ namespace DietDrCamera
 
                 ImVec2 avail;
                 ImGui::GetContentRegionAvail(&avail);
-                const float footerH = PopupFooterHeight();
-                const float bodyH   = (std::max)(avail.y - footerH, avail.y * 0.4f);
+                const float footerH = PopupFooterHeight() + MenuPopupHintBar::ReservedHeight();
+                const float bodyH   = (std::max)(4.0f, avail.y - footerH);
                 const float listW   = (std::max)(avail.x * 0.26f, Sx(200.0f));
 
                 // List selects for viewing only â€” never arms (see the camera
@@ -13156,6 +13323,7 @@ namespace DietDrCamera
                 } else if (btn == 2) {
                     ImGui::CloseCurrentPopup();
                 }
+                sLocationHintBar.Create(sPadRenderLayer);
                 PadEndPopup();
             }
             ImGui::PopID();
@@ -13278,8 +13446,8 @@ namespace DietDrCamera
 
                 ImVec2 avail;
                 ImGui::GetContentRegionAvail(&avail);
-                const float footerH = PopupFooterHeight();
-                const float bodyH   = (std::max)(avail.y - footerH, avail.y * 0.4f);
+                const float footerH = PopupFooterHeight() + MenuPopupHintBar::ReservedHeight();
+                const float bodyH   = (std::max)(4.0f, avail.y - footerH);
                 const float listW   = (std::max)(avail.x * 0.26f, Sx(200.0f));
 
                 // List selects for viewing only â€” never arms (same contract
@@ -13353,6 +13521,7 @@ namespace DietDrCamera
                 } else if (btn == 2) {
                     ImGui::CloseCurrentPopup();
                 }
+                sLocationHintBar.Create(sPadRenderLayer);
                 PadEndPopup();
             }
             ImGui::PopID();
@@ -13492,8 +13661,8 @@ namespace DietDrCamera
 
                 ImVec2 avail;
                 ImGui::GetContentRegionAvail(&avail);
-                const float footerH = PopupFooterHeight();
-                const float bodyH   = (std::max)(avail.y - footerH, avail.y * 0.4f);
+                const float footerH = PopupFooterHeight() + MenuPopupHintBar::ReservedHeight();
+                const float bodyH   = (std::max)(4.0f, avail.y - footerH);
                 const float listW   = (std::max)(avail.x * 0.26f, Sx(200.0f));
 
                 // List selects for viewing only â€” never arms (see the camera
@@ -13548,6 +13717,7 @@ namespace DietDrCamera
                 } else if (btn == 2) {
                     ImGui::CloseCurrentPopup();
                 }
+                sLocationHintBar.Create(sPadRenderLayer);
                 PadEndPopup();
             }
             ImGui::PopID();
@@ -13627,8 +13797,8 @@ namespace DietDrCamera
 
                 ImVec2 avail;
                 ImGui::GetContentRegionAvail(&avail);
-                const float footerH = PopupFooterHeight();
-                const float bodyH   = (std::max)(avail.y - footerH, avail.y * 0.4f);
+                const float footerH = PopupFooterHeight() + MenuPopupHintBar::ReservedHeight();
+                const float bodyH   = (std::max)(4.0f, avail.y - footerH);
                 const float listW   = (std::max)(avail.x * 0.26f, Sx(200.0f));
 
                 RenderLocationListPane(s, "dlg", secIdx, listW, bodyH,
@@ -13699,6 +13869,7 @@ namespace DietDrCamera
                 } else if (btn == 2) {
                     ImGui::CloseCurrentPopup();
                 }
+                sLocationHintBar.Create(sPadRenderLayer);
                 PadEndPopup();
             }
             ImGui::PopID();
@@ -13786,8 +13957,8 @@ namespace DietDrCamera
 
                 ImVec2 avail;
                 ImGui::GetContentRegionAvail(&avail);
-                const float footerH = PopupFooterHeight();
-                const float bodyH   = (std::max)(avail.y - footerH, avail.y * 0.4f);
+                const float footerH = PopupFooterHeight() + MenuPopupHintBar::ReservedHeight();
+                const float bodyH   = (std::max)(4.0f, avail.y - footerH);
                 const float listW   = (std::max)(avail.x * 0.26f, Sx(200.0f));
 
                 // List selects for viewing only â€” never arms (see the camera
@@ -13852,6 +14023,7 @@ namespace DietDrCamera
                 } else if (btn == 2) {
                     ImGui::CloseCurrentPopup();
                 }
+                sLocationHintBar.Create(sPadRenderLayer);
                 PadEndPopup();
             }
             ImGui::PopID();
@@ -14801,6 +14973,9 @@ namespace DietDrCamera
             // boxes different heights.
             if (a_showAimBias) {
                 row("Aim Bias",   &p->transitionAimBias,   &p->transitionSetAimBias,   0.0f, 1.5f);
+                row("Height Bias", &p->transitionHeightBias, &p->transitionSetHeightBias, -1.5f, 1.5f);
+                row("Zoom Bias", &p->transitionZoomBias, &p->transitionSetZoomBias, -1.5f, 1.5f);
+                row("FOV Bias", &p->transitionFOVBias, &p->transitionSetFOVBias, -1.5f, 1.5f);
                 row("Pitch Bias", &p->transitionPitchBias, &p->transitionSetPitchBias, -1.5f, 1.5f);
             }
         }
@@ -14951,7 +15126,9 @@ namespace DietDrCamera
             return;
         }
 
-        FeedGamepadNav();
+        // A visible Quick Tune must not claim input while ANY main-panel
+        // page is open, including pages belonging to other mods.
+        if (!sPadPanelOpen.load(std::memory_order_relaxed)) FeedGamepadNav();
         // Pad arbitration: when the Mod Control Panel is also on screen,
         // it owns the pad â€” Quick Tune's widgets don't register (no
         // cursor over or through this window, no pad input here) until
@@ -15350,7 +15527,7 @@ namespace DietDrCamera
                         // Opening with the pad: park the cursor on the
                         // companion's enable toggle (consumed when the
                         // companion renders later this frame).
-                        if (*revealState && sPadConnected) sPadCursorToToggle = true;
+                        if (*revealState && sMenuNavAvailable) sPadCursorToToggle = true;
                     }
                     if (revOn) ImGui::PopStyleColor();
                     // B just closed this box's companion: hand the cursor
@@ -15397,7 +15574,8 @@ namespace DietDrCamera
         auto drawTransComp = [&](const char* winId, const ImVec2& bMin,
                                  const ImVec2& bSize, CameraProfile* a_transOwner,
                                   float bodyY, auto&& body, float a_extraY = 0.0f,
-                                  int a_bodyRows = 0, const char* title = "Transitions") {
+                                  int a_bodyRows = 0, const char* title = "Transitions",
+                                  bool a_fitRows = false) {
             const float requestedH = bSize.y + a_extraY;
             MenuWindowBounds compBounds{qtCompX, bMin.y, qtCompW, requestedH};
             if (auto* io = ImGui::GetIO(); io && io->DisplaySize.x > 100.0f && io->DisplaySize.y > 100.0f) {
@@ -15430,7 +15608,7 @@ namespace DietDrCamera
             // Trailing ItemSpacing can leave a few pixels of phantom overflow.
             // Keep scrolling disabled while the whole panel fits; enable it
             // when the viewport actually requires a shorter panel.
-            const bool clippedHeight = compH < requestedH;
+            const bool clippedHeight = compH < requestedH && !a_fitRows;
             const ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove
                                       | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize
                                       | (clippedHeight ? ImGuiWindowFlags_None :
@@ -15498,6 +15676,21 @@ namespace DietDrCamera
                 (void)compAvail;
                 sPadCursorToToggle = false;   // no toggle: drop the pad request
                 ImGui::Dummy(ImVec2(0, Sx(6.0f)));
+                // The additional Target Lock rows must stay visible together.
+                // Grow the companion first; on a short viewport fit its row
+                // sizes to the available height instead of adding scrolling.
+                if (a_fitRows && a_bodyRows > 0) {
+                    const auto& style = *ImGui::GetStyle();
+                    const float available = std::max(1.0f, compH - style.WindowPadding.y - ImGui::GetCursorPosY());
+                    const float bodyHeight = static_cast<float>(a_bodyRows) *
+                        (ImGui::GetFrameHeight() + style.ItemSpacing.y);
+                    const float fit = std::min(1.0f, available / bodyHeight);
+                    const ImVec2 padding(style.FramePadding.x, style.FramePadding.y * fit);
+                    const ImVec2 spacing(style.ItemSpacing.x, style.ItemSpacing.y * fit);
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, padding);
+                    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, spacing);
+                    ImGui::SetWindowFontScale(fit);
+                }
                 // Align the body to the section box's slider column. The box's
                 // header may be taller (long title / its own button row), so
                 // drop the companion's sliders to the same Y for a symmetrical
@@ -15520,6 +15713,10 @@ namespace DietDrCamera
                 }
                 if (startY > ImGui::GetCursorPosY()) ImGui::SetCursorPosY(startY);
                 body();
+                if (a_fitRows && a_bodyRows > 0) {
+                    ImGui::SetWindowFontScale(1.0f);
+                    ImGui::PopStyleVar(2);
+                }
                 PadOverlayEnd();
                 ImGui::PopStyleVar();
             }
@@ -15563,7 +15760,6 @@ namespace DietDrCamera
                     auto& pm = PresetManager::GetSingleton();
                     const std::string target   = s.activePresetName;
                     if (pm.UpdatePreset(target)) {
-                        SettingsManager::GetSingleton().Save();
                         if (auto* tasks = SKSE::GetTaskInterface()) {
                             const std::string msg = "Updated Preset: " + target;
                             tasks->AddTask([msg]() {
@@ -15613,9 +15809,6 @@ namespace DietDrCamera
                     const std::string name(sQTNewName);
                     if (!name.empty()) {
                         if (PresetManager::GetSingleton().SavePreset(name)) {
-                            // Persist the live global config too (loaded on launch),
-                            // so the new preset's settings are retained on relaunch.
-                            SettingsManager::GetSingleton().Save();
                             if (auto* tasks = SKSE::GetTaskInterface()) {
                                 const std::string msg = "Saved preset: " + name;
                                 tasks->AddTask([msg]() {
@@ -15855,7 +16048,7 @@ namespace DietDrCamera
                     if (dlgRevOn) ImGui::PushStyleColor(ImGuiCol_Text, kAccentAmber);
                     if (PadButton("Transitions##qt_dlg_trans", ImVec2(dlgBtnW, 0))) {
                         sQTRevealDlg = !sQTRevealDlg;
-                        if (sQTRevealDlg && sPadConnected) sPadCursorToToggle = true;
+                        if (sQTRevealDlg && sMenuNavAvailable) sPadCursorToToggle = true;
                     }
                     if (dlgRevOn) ImGui::PopStyleColor();
                     // B just closed this box's companion: hand the cursor back to
@@ -17082,7 +17275,7 @@ namespace DietDrCamera
                           tlEditComp,
                           tlContentY,
                           [&] { DrawQTTransitions(tlEditComp, /*aimBias=*/true); },
-                          qtTransRowY * 3.0f, /*rows=*/9);
+                          qtTransRowY * 6.0f, /*rows=*/12, "Transitions", /*fitRows=*/true);
     }
 
     static void RenderCameraNoiseImpl()
@@ -17638,7 +17831,7 @@ namespace DietDrCamera
                                 // merely rendered â€” otherwise opening the box
                                 // would seed 28 disabled entries per state
                                 // into the preset.
-                                if (ImGui::IsItemHovered(0) || PadItemIsCursor()) {
+                                if (ClipboardItemHovered()) {
                                     const std::string bk = _nShPfx + "base" + _nShSfx;
                                     MarkEntryHover(EntryClipKind::Noise,
                                                    &s.EditTargetStateNoise(bk),
@@ -17654,7 +17847,7 @@ namespace DietDrCamera
                                     sNoiseShoutSelByKey[_nShoutKey] = static_cast<int>(si2);
                                     _nShoutSel = static_cast<int>(si2);
                                 }
-                                if (ImGui::IsItemHovered(0) || PadItemIsCursor()) {
+                                if (ClipboardItemHovered()) {
                                     const std::string sk = _nShPfx + shEntry.tomlKey + _nShSfx;
                                     MarkEntryHover(EntryClipKind::Noise,
                                                    &s.EditTargetStateNoise(sk),
@@ -17701,7 +17894,7 @@ namespace DietDrCamera
                                 // (weapons.melee.power_attack.dir.<dir>); a paste
                                 // turns the cell's gate on. Hover-gated so merely
                                 // rendering the box never creates the cells.
-                                if (ImGui::IsItemHovered(0) || PadItemIsCursor()) {
+                                if (ClipboardItemHovered()) {
                                     static constexpr const char* kPaDirNoiseKeysBox[] = {
                                         "standing", "forward", "back", "left", "right"
                                     };
@@ -18250,7 +18443,7 @@ namespace DietDrCamera
         static std::uint32_t sSelectedAnimUid = 0;
 
         ImGui::SetWindowFontScale(1.4f);
-        ImGui::TextWrapped("Choose an animation in the library, then bind it. Its camera settings apply when the player uses that animation.");
+        ImGui::TextWrapped("Select an animation in the library to bind it. Its camera settings apply when the player uses that animation.");
         if (!ctl.OarAvailable()) {
             ImGui::TextWrapped(
                 "Open Animation Replacer was not detected — animations are identified by "
@@ -18260,7 +18453,7 @@ namespace DietDrCamera
 
         ImVec2 animBodyAvail;
         ImGui::GetContentRegionAvail(&animBodyAvail);
-        const float animBoxBottomY = ImGui::GetCursorPosY() + animBodyAvail.y;
+        const float animBoxBottomY = ImGui::GetCursorPosY() + animBodyAvail.y - ImGui::GetStyle()->CellPadding.y;
         if (ImGui::BeginTable("##animcam_split", 3,
                               ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_PadOuterX |
                                   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings)) {
@@ -18272,15 +18465,13 @@ namespace DietDrCamera
             ImGui::TableSetColumnIndex(0);
             const auto library = RenderAnimationLibrary(s, ctl, sSelectedAnimUid, animBoxBottomY);
             const float animBoxTopY = library.top;
-            const float animListH = library.height;
+            const float animListH = library.buttonTop - animBoxTopY - ImGui::GetStyle()->ItemSpacing.y;
 
             // ---- Col 2: Bound Animations ----------------------------------
             ImGui::TableSetColumnIndex(1);
             ImGui::TextUnformatted("Bound Animations");
             {
-                // LEVEL with the Recent box: col 1's Listen/search row pushes
-                // its box down, so this column drops its cursor to the SAME
-                // top Y and reuses the same height — tops and bottoms align.
+                // Match the library's top and leave room for Remove below.
                 ImGui::SetCursorPosY(animBoxTopY);
                 if (PadNavBeginChild("##animcam_entries", ImVec2(0, animListH),
                                      ImGuiChildFlags_Border, ImGuiWindowFlags_NavFlattened)) {
@@ -18307,6 +18498,7 @@ namespace DietDrCamera
                 PadNavEndChild();
             }
             {
+                ImGui::SetCursorPosY(library.buttonTop);
                 // Gray, don't hide — a disappearing button reflows the column.
                 const bool canRemove =
                     sSelectedAnimUid != 0 && s.FindAnimationCamera(sSelectedAnimUid) != nullptr;
@@ -18405,6 +18597,7 @@ namespace DietDrCamera
                     RenderLocationNoiseButton(locKey, entry->name.c_str());
                     MarkEntryHover(EntryClipKind::Noise, &entry->NoiseFor(animEnv),
                                    entry->name.c_str());
+                    RecordClipboardHint(MenuControllerHints::ClipboardLabels::Noise);
                     ImGui::Dummy(ImVec2(0, Sx(8.0f)));
                     sCompactScale = true;
                     RenderNoiseSliders(entry->NoiseFor(animEnv), /*tight=*/true);
@@ -18424,6 +18617,7 @@ namespace DietDrCamera
     // Reusable hotkey-bind button (keyboard scancode or gamepad bit), same
     // capture pattern as the Death Camera skip binder. Only one binder can be
     // arming at a time (tracked by a_id). Writes the captured code into *a_key.
+
     static void RenderCinematicEffectsContent()
     {
         using namespace ImGuiMCP;
@@ -18434,7 +18628,7 @@ namespace DietDrCamera
         // sources under their effect name with a separator and a
         // disabled-text section header per group.
         enum class Kind {
-            AttackLag, FleeFraming, DrawSource, JumpNoise, HeadBob,
+            AttackLag, FleeFraming, DamageReaction, CombatFraming, DrawSource, JumpNoise, HeadBob,
             // StairSmoothing removed 2026-08-15 â€” always on at max now
             // (a fix, not a preference); see the [STAIRS] block in
             // HookManager.
@@ -18458,6 +18652,8 @@ namespace DietDrCamera
             // Camera Noise magic/staves cells, shout entries, the werewolf
             // roar, and the archery Drawing entries.
             { "Flee Framing",       Kind::FleeFraming,       0 },
+            { "Damage Reaction",    Kind::DamageReaction,   0 },
+            { "Crowd Modifier",     Kind::CombatFraming,    0 },
             // Weapons â€” the draw / put-away beat (one entry, both directions)
             { "Sheathe / Unsheathe", Kind::DrawSource, 0 },
             // Movement â€” the airborne arc split into its three phases
@@ -18625,6 +18821,8 @@ namespace DietDrCamera
                         const char* header = nullptr;
                         switch (e.kind) {
                         case Kind::AttackLag:           header = "Combat";                      break;
+                        case Kind::DamageReaction:      break;
+                        case Kind::CombatFraming:       break;
                         case Kind::FleeFraming:         /* same Combat group â€” no header */     break;
                         case Kind::DrawSource:          header = "Weapons";                     break;
                         case Kind::JumpNoise:           header = "Movement";                    break;
@@ -18743,11 +18941,7 @@ namespace DietDrCamera
             // Paragliding pane's group headers: clearly larger than the pane's
             // compact 1.05 base, restored to it on the way out.
             auto fxPovHeader = [&](const char* a_label) {
-                ImGui::Dummy(ImVec2(0, Sx(10.0f)));
-                ImGui::SetWindowFontScale(1.45f);
-                ImGui::SeparatorText(a_label);
-                ImGui::SetWindowFontScale(1.05f);
-                ImGui::Dummy(ImVec2(0, Sx(4.0f)));
+                RenderPovSectionHeader(a_label);
             };
             // Both halves carry the SAME slider names ("Intensity", "Speed",
             // the character rows), and RenderSlider pushes the label as the
@@ -18799,13 +18993,33 @@ namespace DietDrCamera
                              nullptr, "Reset To Default", false, "%.2f s");
                 break;
             case Kind::FleeFraming:
-                ImGui::TextWrapped(
-                    "Smoothly adjusts framing when moving towards the camera. "
-                    "Full strength settles at the active camera distance.");
+                ImGui::TextWrapped("Keeps the player in frame when running towards the camera.");
                 ImGui::Dummy(ImVec2(0, Sx(8.0f)));
                 RenderSlider("Strength", &s.fleeFramingStrength, 0.0f, 1.0f, 0.01f, 0.0f,
                              nullptr, "Reset To Default");
                 break;
+            case Kind::CombatFraming: {
+                ImGui::TextWrapped("Increases zoom distance and FOV around groups of enemies.");
+                fxPovBegin("Third Person", "fx_crowd_tp");
+                RenderSlider("Zoom Intensity", &s.combatFraming.zoomIntensity, 0.0f, CombatFraming::kMaxIntensity, 0.05f, 0.0f);
+                RenderSlider("FOV Intensity", &s.combatFraming.fovIntensity, 0.0f, CombatFraming::kMaxIntensity, 0.05f, 0.0f);
+                fxPovEnd();
+                break;
+            }
+            case Kind::DamageReaction: {
+                ImGui::TextWrapped("Moves the camera with the force and direction of incoming attacks.");
+                const auto renderDamage = [&](DamageReaction::Tuning& tuning) {
+                    const DamageReaction::Tuning defaults;
+                    RenderSlider("Intensity", &tuning.intensity, 0.0f, 3.0f, 0.05f, defaults.intensity, nullptr, "Reset To Default");
+                };
+                fxPovBegin("Third Person", "fx_damage_tp");
+                renderDamage(s.damageReaction);
+                fxPovEnd();
+                fxPovBegin("First Person", "fx_damage_fp");
+                renderDamage(s.damageReactionFp);
+                fxPovEnd();
+                break;
+            }
             case Kind::DrawSource: {
                 ImGui::TextWrapped(
                     "Adds noise when sheathing or unsheathing.");
@@ -19119,9 +19333,8 @@ namespace DietDrCamera
                 break;
             case Kind::NpcNoise:
                 ImGui::TextWrapped(
-                    "Adds your noise settings to nearby NPCs, including weapon type, specific weapon and shout overrides. "
-                    "Archery follows bow and crossbow releases. "
-                    "Transformations covers werewolf and Vampire Lord form changes and combat effects.");
+                    "Adds camera noise to nearby NPC actions. "
+                    "Passing arrows, bolts and magic create stronger noise the closer they come.");
                 ImGui::Dummy(ImVec2(0, Sx(8.0f)));
                 // Both halves under their own headers, exactly like every
                 // other source on this page (2026-09-07). The third-person
@@ -19995,7 +20208,7 @@ namespace DietDrCamera
                             // stateFirstPerson[key] is created only for the row
                             // actually under the cursor, so merely rendering the
                             // 56-row list doesn't populate the map.
-                            if (ImGui::IsItemHovered(0) || PadItemIsCursor()) {
+                            if (ClipboardItemHovered()) {
                                 auto& fpShProf = s.EnsureStateFp(keyTmp);
                                 MarkEntryHover(EntryClipKind::FirstPerson, &fpShProf,
                                                ("Shouts - " + labelTmp).c_str());
@@ -20792,9 +21005,9 @@ namespace DietDrCamera
         };
 
         const auto markBindingSlot = [&](SettingsManager::WeaponBinding& b, int slot, const char*) {
-            if (!ImGui::IsItemHovered(0) && !PadItemIsCursor()) return;
+            if (!ClipboardItemHovered()) return;
             sEntryHover = BindingClipboardTarget(s, b, slot, section);
-            sEntryHover.owner = { ImGui::GetFrameCount(), ImGui::GetItemID() };
+            PublishEntryHover();
         };
 
         // ---- Perspective split -------------------------------------------

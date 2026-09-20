@@ -1,0 +1,27 @@
+DIET DR CAMERA 1.2.0 - STARTUP SUPPORT
+
+If the game fails to start, reproduce it once and attach:
+- DietDrCamera.log and skse64.log from that same launch.
+- The full error message, not just its source filename and line number.
+- A Crash Logger report if the game crashed and one was generated.
+
+Tell us whether it happened before the main menu, while loading a save, or
+during play, and what you were doing. Startup diagnostics are automatic;
+you do not need to enable Verbose Logging.
+
+Log folders (use your Windows Documents folder, including OneDrive redirection):
+Steam: Documents\My Games\Skyrim Special Edition\SKSE\
+GOG: Documents\My Games\Skyrim Special Edition GOG\SKSE\
+
+DDC retains three older sessions as DietDrCamera.1.log, .2.log and .3.log.
+Copy the matching files soon after the failure. If normal logging is unavailable,
+DDC tries %TEMP%\DietDrCamera\DietDrCamera.log. Hook errors report the log path.
+If SKSE fails before loading DDC, a new DDC log cannot be created; send the
+SKSE log and loader error instead.
+
+Logs remain on your computer and are not uploaded automatically. They include
+local paths and loaded module names. Send them with your support report.
+
+The logging is intended to help diagnose remaining runtime/mod conflicts.
+It is not a claim that every Skyrim version now works. See SUPPORT-LOGGING.md
+and RUNTIME-SUPPORT.md in the matching source ZIP for details.
