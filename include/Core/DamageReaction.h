@@ -43,6 +43,14 @@ namespace DietDrCamera::DamageReaction
         std::uint32_t attacker = 0, source = 0;
     };
 
+    inline bool IsIncomingValueSource(int spellType, bool casterIsVictim)
+    {
+        // A zero-duration ability can update every frame. Sunlight damage and
+        // racial/stat penalties are persistent actor state, not fresh impacts.
+        // Keep source-less hazards and lingering enemy damage eligible.
+        return !casterIsVictim && spellType != 1 && spellType != 4 && spellType != 10;
+    }
+
     inline bool IsHarmfulEffectTick(float amount, bool hostile, bool detrimental, bool affectsHealth)
     {
         // A detrimental stat modifier is not necessarily damage: block perks
@@ -50,6 +58,17 @@ namespace DietDrCamera::DamageReaction
         // The affected value identifies damage; its amount and the player's
         // current/maximum health never scale the reaction.
         return affectsHealth && std::isfinite(amount) && amount < 0 && (hostile || detrimental);
+    }
+
+    inline bool IsHarmfulValueApplication(float amount, bool hostile, bool detrimental,
+        int requestedValue, int storedValue, bool dual = false, int secondaryValue = -1, float secondaryWeight = 0)
+    {
+        // Native ValueModifierEffect uses its stored AV when passed kNone.
+        // DualValueModifierEffect always applies that primary AV, then calls
+        // the base implementation directly for its weighted secondary value.
+        const int primary = dual || requestedValue == -1 ? storedValue : requestedValue;
+        return IsHarmfulEffectTick(amount, hostile, detrimental, primary == 24) ||
+            (dual && IsHarmfulEffectTick(amount * secondaryWeight, hostile, detrimental, secondaryValue == 24));
     }
 
     // Only values cross from damage callbacks to the camera thread.

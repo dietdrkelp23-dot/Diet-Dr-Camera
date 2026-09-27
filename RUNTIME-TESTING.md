@@ -1,5 +1,54 @@
 # Runtime testing and release evidence
 
+Current 1.3.0 acceptance is recorded in [RUNTIME-LIVE-RESULTS.md](RUNTIME-LIVE-RESULTS.md):
+the author confirmed all ten prepared runtime versions work, then confirmed the
+rapid Whirlwind Sprint follow-up in the main setup and requested release. The
+original run records and candidate hashes are preserved. Individual integration
+profiles and every checklist item were not separately graded by those reports.
+
+The 1.3.0 launcher procedure is [RUNTIME-LIVE-TESTING.md](RUNTIME-LIVE-TESTING.md).
+Current build/package gates and remaining coverage are in
+[RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md). The dated evidence below retains
+its original version/build scope.
+
+## September 24 deep audit
+
+The current release and native-movement builds each pass 47 CTests. The offline
+matrix passes 735 scenarios on all 21 available Steam executables; a follow-up
+checks the final 67 shipping and 12 development vtable identities on each image.
+Projectile return-value, late call-patch, and collision-entry ownership/range
+changes are documented in [RUNTIME-DEEP-AUDIT.md](RUNTIME-DEEP-AUDIT.md).
+Both GOG Address Library databases pass the explicit-ID audit, but GOG executable
+fixtures and live testing of these candidates remain outstanding. The dated
+records below describe earlier binaries and do not supply live acceptance for
+these changes.
+
+
+## Unreleased ragdoll audio suppression (September 19, 2026)
+
+Recoverable ragdoll entry now stops `BleedoutCameraState::activeSound` immediately
+after native Begin starts it. Normal death entry and diagnostic suspension retain
+the native path. The existing camera hooks are reused; no audio files, sound
+categories, camera tuning or preset settings are changed. The per-entry
+`[Ragdoll] Camera ambience stop` log records the sound ID and Stop return value.
+
+Capstone inspection of all 21 available Steam executables confirms the handle
+at +0x128, Begin's Play call, and End's native call to BSSoundHandle::Stop on
+that same handle (IDs 66358/67619). No direct Play call appears in native Update.
+Both GOG Address Library files contain the Stop ID; their executable fixtures
+remain missing. These are offline instruction checks, not an audible game test.
+The shared vanilla audio-file workaround is described at
+https://www.nexusmods.com/skyrimspecialedition/mods/41403; this change uses only
+the camera's individual handle.
+
+The Release build and all 41 standalone checks pass. The DLL/PDB are installed
+in Finale with matching build hashes, the previous DLL backed up and all five
+protected files unchanged. The previous installation had no PDB. In-game listening
+remains pending. This is a local development build after the published v1.2.0 tag;
+its release archives and tag are unchanged.
+DLL SHA-256: `BFCC0918F9E19DD0EE4BB72D487FDACDF29467E7900EF2FAE2AF65CF6D85642A`.
+Evidence: `build/diagnostics/ragdoll-audio-20260919/`.
+
 ## Version 1.2.0 release preparation (September 19, 2026)
 
 The versioned Release DLL and all **41 standalone checks pass**. These include
@@ -136,7 +185,7 @@ Underlying frame stalls are not fixed by this camera-side change.
 ## High-speed paraglider stutter investigation (September 19, 2026)
 
 The user reported stutter when using Whirlwind Sprint off a cliff at extreme
-speed and deploying the paraglider. The retained `DietDrCamera.2.log` from
+speed and deploying the paraglider. The retained `OmniCam.2.log` from
 18:31 on September 19 contains a glide at 18:35-18:36. Its old `[PARAALT]`
 samples include a 0.706-second interval, but those messages accumulate clamped
 noise-envelope time and only run while gliding. They cannot establish frame
@@ -285,7 +334,7 @@ Evidence is in `build/diagnostics/magic-flyby-20260919/`. Bounded ordinary-log
 pass strength; `[NPCNOISE] contributing` identifies rendered magic flybys.
 
 The Release build and all 40 CTests pass. `deployment.json` records the installed
-DLL/PDB hashes under `C:/SkyrimMo2/mods/Diet Dr Camera/SKSE/Plugins` in Finale;
+DLL/PDB hashes under `C:/SkyrimMo2/mods/OmniCam/SKSE/Plugins` in Finale;
 the previous working pair is backed up. All four protected settings/preset files
 and the mod list remain byte-identical to this task's intake.
 
@@ -417,7 +466,7 @@ breath-impact path.
 Evidence, exact installed DLL/PDB hashes and protected-file verification are in
 `build/diagnostics/creature-attacks-20260919/deployment.json`. The previous pair
 is retained in that directory's `previous-binaries/`. Installation copies only
-the DLL/PDB into the enabled Diet Dr Camera mod in MO2's Finale profile; the
+the DLL/PDB into the enabled OmniCam mod in MO2's Finale profile; the
 four settings/preset files and mod list are checked against saved hashes.
 No new engine hooks, relocation IDs, preset fields or UI controls are added.
 
@@ -530,7 +579,7 @@ layout evidence is in `build/diagnostics/cinematic-readable-preview-20260919/`.
 ## Cinematic Views UI deployment (September 19, 2026)
 
 Installed the compact Cinematic Views build in the active `Finale` profile's
-`C:/SkyrimMo2/mods/Diet Dr Camera/SKSE/Plugins/` directory. Subject rows bind on
+`C:/SkyrimMo2/mods/OmniCam/SKSE/Plugins/` directory. Subject rows bind on
 activation; search, Bind, Enabled and Preview controls are removed. The pane uses
 Cinematic Effects' compact sliders and text scaling. The Release build and all
 39 CTests passed, as did headless layout and interaction checks. In-game visual
@@ -1250,7 +1299,7 @@ versions below.
 
 Initial candidate DLL SHA-256:
 `D8CC72685E00CD540DBD115A53D293BD3E37904D247157D0069E5958C6AC0064`.
-The DLL and matching PDB were installed in the normal MO2 Diet Dr Camera mod.
+The DLL and matching PDB were installed in the normal MO2 OmniCam mod.
 The previous DLL and deployment manifest are preserved under
 `build/controller-compatibility-backup-20260916-201018/`.
 
@@ -1488,7 +1537,7 @@ The author approved version 1.1.0 for release on September 15, 2026 after
 testing in the normal 1.6.1170 mod list. The original reporter's exact runtime
 and mod combination remain unknown. A message ending in
 `Hooks/RuntimeHooks.cpp(24)` identifies the shared failure handler.
-Retain the complete message, `DietDrCamera.log`, Skyrim's ProductVersion,
+Retain the complete message, `OmniCam.log`, Skyrim's ProductVersion,
 SKSE version, Address Library package version, and the active plugin list.
 
 ## Current evidence (September 15, 2026)

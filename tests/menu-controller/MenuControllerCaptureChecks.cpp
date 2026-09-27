@@ -374,6 +374,9 @@ static void CheckCenteredHintLayout()
             for (const auto* subject : Hints::ClipboardLabels::All) {
                 auto context = full;
                 context.clipboardSubject = subject;
+                context.clipboardIsTab = false;
+                check(context);
+                context.clipboardIsTab = true;
                 check(context);
                 context.clipboardHasContents = false;
                 check(context);
@@ -912,8 +915,16 @@ int main() try
         "DDC hints ignored custom controller bindings");
     CheckCenteredHintLayout();
     hintContext.clipboardSubject = "Entire Tab"; Frame();
-    Require(HasHint("X", "Copy Entire Tab") && HasHint("Y", "Paste Entire Tab"),
-        "Clipboard hints did not explain copying a whole tab");
+    Require(HasHint("X", "Copy Entire Tab") && HasHint("Y", "Paste Entry to All") && !HasHint("Y", "Paste Entire Tab"),
+        "A copied entry on a tab did not advertise applying it to all entries");
+    hintContext.clipboardIsTab = true; Frame();
+    Require(HasHint("X", "Copy Entire Tab") && HasHint("Y", "Paste Entire Tab") && !HasHint("Y", "Paste Entry to All"),
+        "A copied whole tab lost its distinct paste hint");
+    hintContext.clipboardHasContents = false; Frame();
+    Require(HasHint("X", "Copy Entire Tab") && !HasHint("Y", "Paste Entire Tab") && !HasHint("Y", "Paste Entry to All"),
+        "An empty clipboard advertised tab paste");
+    hintContext.clipboardHasContents = true;
+    hintContext.clipboardIsTab = false;
     hintContext.clipboardSubject = "Transition Override"; Frame();
     Require(HasHint("X", "Copy Transition Override") && HasHint("Y", "Paste Transition Override"),
         "Override descriptions did not reach the grouped footer");

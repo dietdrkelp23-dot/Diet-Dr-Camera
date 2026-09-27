@@ -1,60 +1,31 @@
-# Source corresponding to Diet Dr Camera 1.2.0
+# Source provenance - OmniCam 1.3.0
 
-Tag `v1.2.0` contains the complete source corresponding to the verified 1.2.0
-release package. The implementation, tests, dependencies and build recipes
-come from its 5,251-file source archive. Git may normalize CRLF/LF line endings;
-source content is checked against the archive before publication.
+The 1.3.0 update is based on the hash-verified September 19 1.2.0 release
+snapshot, with the subsequent fixes listed in RELEASE-NOTES.md. Native
+movement/combat experiments and their OAR bridge are absent from this source.
+The pre-rollback development work is preserved privately in the local evidence
+directory.
 
-Two documentation files differ from the archive: this provenance record and
-`nexus/CHANGELOG-1.2.0.txt`, which contains the author's simplified changelog.
-The repository's `.gitignore` is additional. The runtime and source ZIPs are
-unchanged; these text edits do not change the packaged DLL or its build inputs.
+The corresponding source is `OmniCam - Source-1.3.0.zip`. It contains
+the working source used for this release, including changes since the base
+Git revision, bundled CommonLibSSE-NG/MinHook sources, all seven vcpkg library
+source trees, exact dependency recipes, tests, licenses and build instructions.
+No game executables, runtime databases, personal presets or logs are included.
 
-The development base revision is `f98c1e7129b72ffdc87f4a6460b5fd1222623930`.
-The public tag has its own commit in this repository's publication history.
-CommonLibSSE-NG remains pinned to `c5424463bba9af0d75cde8640ba7ddd4cacb9e39`.
+`tools/package-release.ps1` snapshots these files before building, verifies
+that its inputs have not changed, rebuilds from clean objects, runs the
+standalone checks, validates the
+DLL's version and matching PDB identity, and checks every archive member's
+size and SHA-256. The private candidate's `manifest.json` records the base
+revision, working changes, vendor revision, file inventory and artifact hashes.
+`SHA256SUMS.txt` identifies the two archives and that manifest. The matching
+PDB is retained privately for reports that identify this build in their log.
 
-| Artifact | SHA-256 |
-| --- | --- |
-| Diet Dr Camera-1.2.0.zip | `89B14BF033A6B4162CBAE8C12A48D4C2EFECCDCB481B337377719C305994D154` |
-| Diet Dr Camera - Source-1.2.0.zip | `467A244EC536056A986996289963130D0CC0CA89BBE955E4FBCDC26DEEBFBF45` |
-| DietDrCamera.dll inside the runtime ZIP | `1A41D065F534E3243325E439B46E0502CCEF3C0C5FB569DE9F3D27543213B170` |
+The source ZIP is complete without Git metadata. Follow `BUILDING.md` to
+configure and build it with automatic deployment disabled. Compiler/SDK
+differences may change binary hashes; arbitrary toolchain reproducibility is
+not promised. Automated checks do not establish gameplay compatibility with
+every Skyrim runtime. See `RUNTIME-SUPPORT.md` and `RELEASE-CHECKLIST.md`.
 
-The Desktop upload copies use the shorter names `Diet Dr Camera.zip` and
-`Diet Dr Camera - Source.zip`; their bytes match the corresponding archives.
-The runtime ZIP contains only the plugin and the intentional empty
-`staggercamera.hkx` animation override. Matching PDB symbols remain private.
-
-The source includes the plugin, CommonLibSSE-NG, MinHook, all seven linked
-vcpkg library source trees, pinned recipes/patches, tests and licenses. No game
-executable, private runtime fixture, personal preset or compiled plugin is
-included. See [BUILDING.md](BUILDING.md) for complete build instructions.
-Skyrim and a Nexus account are not required to compile or run standalone checks.
-
-## Verification and runtime coverage
-
-The release build passed all **41 standalone checks**. The exact source ZIP
-was also extracted outside the development checkout and configured and built
-with Visual Studio 2026/MSVC 14.50, CMake 4.2.3, the pinned vcpkg baseline and
-`x64-windows-static-md`. Auto-deployment was disabled. That clean build also
-passed all **41 checks**, including release metadata/PDB pairing and automatic
-startup logging. No implementation or build-recipe changes were made for this
-publication, so those results apply to the same source content.
-
-Fresh offline checks passed **210 hook scenarios on 21 Steam executables**,
-with **47 hooked vtable targets per executable**. GOG 1.6.659 and 1.6.1179
-executable fixtures remain unavailable. Offline checks do not execute the game
-or establish gameplay compatibility. The final packaged DLL has not had a new
-in-game smoke test during release preparation; earlier startup results belong
-to the build identities recorded in [RUNTIME-TESTING.md](RUNTIME-TESTING.md).
-
-Version 1.2.0 includes automatic startup diagnostics and retains three previous
-DDC logs. See [SUPPORT-LOGGING.md](SUPPORT-LOGGING.md) for reporting failures and
-[RUNTIME-SUPPORT.md](RUNTIME-SUPPORT.md) for runtime targets and remaining gaps.
-Logging is intended to help investigate other-runtime/mod conflicts; it is
-not proof that all reported failures are fixed.
-
-Compiler, SDK and build-path differences can change binary hashes; arbitrary
-rebuilds are not promised to be byte-for-byte identical. The artifact hashes
-above identify the unchanged release archives, not GitHub's generated ZIPs.
-Earlier tags remain available for review of their corresponding releases.
+Release preparation creates local artifacts. This document does not assert
+that a version 1.3.0 GitHub tag or Nexus upload has been published.

@@ -55,6 +55,8 @@ namespace DietDrCamera::MenuControllerHints
         std::string_view clipboardSubject;
         // A Paste binding alone does not mean the menu clipboard has a payload.
         bool clipboardHasContents = false;
+        // A tab payload matches entries; a single entry fills the destination tab.
+        bool clipboardIsTab = false;
         // Empty means unbound. The caller resolves these from live settings,
         // using the same key-name function as the binding buttons.
         std::string copy, paste, quickTune;
@@ -87,6 +89,13 @@ namespace DietDrCamera::MenuControllerHints
         return name.starts_with("Key ") ? name : "Key " + name;
     }
 
+    inline std::string PasteAction(const Context& context)
+    {
+        if (context.clipboardSubject == ClipboardLabels::Tab && !context.clipboardIsTab)
+            return "Paste Entry to All";
+        return "Paste " + std::string(context.clipboardSubject);
+    }
+
     inline std::vector<Hint> Build(const Context& context)
     {
         if (context.keyboard) {
@@ -97,7 +106,7 @@ namespace DietDrCamera::MenuControllerHints
             if (!context.clipboardSubject.empty()) {
                 if (!context.copy.empty()) hints.push_back({Slot::Copy, context.copy, "Copy " + std::string(context.clipboardSubject)});
                 if (context.clipboardHasContents && !context.paste.empty())
-                    hints.push_back({Slot::Paste, context.paste, "Paste " + std::string(context.clipboardSubject)});
+                    hints.push_back({Slot::Paste, context.paste, PasteAction(context)});
             }
             if (!context.quickTune.empty() && (context.mode == Mode::Page || context.mode == Mode::Sidebar))
                 hints.push_back({Slot::QuickTune, context.quickTune, "Open Quick Tune"});
@@ -124,7 +133,7 @@ namespace DietDrCamera::MenuControllerHints
         if (!context.clipboardSubject.empty()) {
             if (!context.copy.empty()) hints.push_back({Slot::Copy, context.copy, "Copy " + std::string(context.clipboardSubject)});
             if (context.clipboardHasContents && !context.paste.empty())
-                hints.push_back({Slot::Paste, context.paste, "Paste " + std::string(context.clipboardSubject)});
+                hints.push_back({Slot::Paste, context.paste, PasteAction(context)});
         }
         if (!context.quickTune.empty() && context.mode == Mode::Page)
             hints.push_back({Slot::QuickTune, context.quickTune, "Open Quick Tune"});
@@ -149,6 +158,7 @@ namespace DietDrCamera::MenuControllerHints
             candidates.push_back({Slot::Copy, context.copy, "Copy " + std::string(subject)});
             candidates.push_back({Slot::Paste, context.paste, "Paste " + std::string(subject)});
         }
+        candidates.push_back({Slot::Paste, context.paste, "Paste Entry to All"});
         return candidates;
     }
 }

@@ -1,7 +1,9 @@
 #include "PCH.h"
 #include "Core/Version.h"
 #include "Core/Diagnostics.h"
+#include "Dialogue/DBVOIntegration.h"
 #include "Camera/VanityCamera.h"
+#include "Camera/BleedoutCameraOverride.h"
 #include <Windows.h>
 #include "Camera/CameraNoiseController.h"
 #include "Camera/HitShakeController.h"
@@ -86,6 +88,7 @@ namespace
             if (a_event->opening && a_event->menuName == "Main Menu") {
                 spdlog::info("Main Menu opening — releasing death free-look input");
                 DietDrCamera::HookManager::ReleaseDeathFreeLookInput();
+                DietDrCamera::BleedoutCameraOverride::Reset();
             }
             // Dialogue Menu open/close drives the face-lock gate's lastSpeaker
             // fallback. Fallback is valid only while the menu is open;
@@ -157,7 +160,7 @@ namespace
         if (IsGrassPrecacheRun()) {
             if (a_msg->type == SKSE::MessagingInterface::kPostLoad) {
                 spdlog::warn("Grass cache pre-generation detected (PrecacheGrass.txt in the game "
-                             "root) — Diet Dr Camera is staying dormant for this run: no hooks, "
+                             "root) — OmniCam is staying dormant for this run: no hooks, "
                              "no menu, no camera. Delete PrecacheGrass.txt to play normally.");
             }
             return;
@@ -193,6 +196,7 @@ namespace
             break;
         case SKSE::MessagingInterface::kPostPostLoad:
             DietDrCamera::Diagnostics::Checkpoint("PostPostLoad received");
+            DietDrCamera::DBVOIntegration::Initialize();
             break;
         case SKSE::MessagingInterface::kInputLoaded:
             DietDrCamera::Diagnostics::Checkpoint("InputLoaded received");
@@ -207,10 +211,11 @@ namespace
             DietDrCamera::Diagnostics::Checkpoint("InputLoaded complete");
             break;
         case SKSE::MessagingInterface::kDataLoaded:
-            spdlog::info("Diet Dr Camera: data loaded");
+            spdlog::info("OmniCam: data loaded");
             DietDrCamera::Diagnostics::Checkpoint("DataLoaded: initializing game forms");
             DietDrCamera::ShoutRegistry::GetSingleton().Init();
             DietDrCamera::EnemyDetector::GetSingleton().Init();
+            DietDrCamera::CameraNoiseController::InitializeGameForms();
             DietDrCamera::Diagnostics::Checkpoint("DataLoaded: loading settings and active preset");
             DietDrCamera::SettingsManager::GetSingleton().Load();
             // Settings live in presets now — the global config holds only the
@@ -254,9 +259,11 @@ namespace
             break;
         case SKSE::MessagingInterface::kPreLoadGame:
             DietDrCamera::Diagnostics::Checkpoint("PreLoadGame received; resetting camera state");
+            DietDrCamera::DBVOIntegration::Reset();
             DietDrCamera::CrosshairManager::GetSingleton().ResetTracing();
             DietDrCamera::HitShakeController::Reset();
             DietDrCamera::VanityCamera::Reset();
+            DietDrCamera::BleedoutCameraOverride::Reset();
             DietDrCamera::CameraEffectClock::Resume();
             DietDrCamera::HookManager::ResetMenuCameraAnimation();
             break;
@@ -265,6 +272,8 @@ namespace
             break;
         case SKSE::MessagingInterface::kNewGame:
             DietDrCamera::Diagnostics::Checkpoint("NewGame received");
+            DietDrCamera::BleedoutCameraOverride::Reset();
+            DietDrCamera::DBVOIntegration::Reset();
             break;
         }
     }
@@ -273,7 +282,7 @@ namespace
 SKSE_PLUGIN_VERSION = [] {
     SKSE::PluginVersionData version;
     version.PluginVersion({ DDC_VERSION_MAJOR, DDC_VERSION_MINOR, DDC_VERSION_PATCH });
-    version.PluginName("Diet Dr Camera");
+    version.PluginName("OmniCam");
     version.UsesAddressLibrary();
     version.UsesNoStructs();  // NG accessors handle the runtime-dependent layouts.
     return version;        // Includes the Address Library v5 flag for Skyrim 1.7.
@@ -306,7 +315,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 
     const auto runtime = REL::Module::get().version();
     if (!DietDrCamera::RuntimeVersion::IsKnown({runtime[0], runtime[1], runtime[2], runtime[3]})) {
-        spdlog::critical("Skyrim {} has not been reviewed for engine layout compatibility; update Diet Dr Camera before using this runtime.", runtime.string());
+        spdlog::critical("Skyrim {} is outside OmniCam's supported runtimes (SE 1.5.97 minimum); check RUNTIME-SUPPORT.md for the supported version list.", runtime.string());
         return false;
     }
 
@@ -317,7 +326,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
         const auto v = REL::Module::get().version();
         const char* rt = REL::Module::IsVR() ? "VR"
                        : (REL::Module::IsAE() ? "AE" : "SE");
-        spdlog::info("Diet Dr Camera v" DDC_VERSION_STRING " | Skyrim {}.{}.{}.{} ({})",
+        spdlog::info("OmniCam v" DDC_VERSION_STRING " | Skyrim {}.{}.{}.{} ({})",
                      v[0], v[1], v[2], v[3], rt);
     }
 

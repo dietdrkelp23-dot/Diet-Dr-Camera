@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(
-    DietDrCamera
-    VERSION 1.2.0
+    OmniCam
+    VERSION 1.3.0
     LANGUAGES CXX
 )
 
@@ -18,7 +18,7 @@ if(MSVC)
     file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" DDC_SOURCE_PATH)
     add_compile_options(
         $<$<CONFIG:Release>:/experimental:deterministic>
-        "$<$<CONFIG:Release>:/pathmap:${DDC_SOURCE_PATH}=DietDrCamera>")
+        "$<$<CONFIG:Release>:/pathmap:${DDC_SOURCE_PATH}=OmniCam>")
 endif()
 configure_file(cmake/Version.h.in generated/Core/Version.h @ONLY)
 if(WIN32)
@@ -67,6 +67,10 @@ add_library(${PROJECT_NAME} SHARED
 if(WIN32)
     target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/Version.rc")
 endif()
+
+# Retain the installed DLL/PDB identity so upgrades replace the existing plugin.
+# Public SKSE metadata, menus and release artifacts use OmniCam.
+set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME DietDrCamera)
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -159,7 +163,7 @@ set(DDC_LICENSE_INPUTS "${CMAKE_CURRENT_SOURCE_DIR}/LICENSING.md" "${CMAKE_CURRE
     "${CMAKE_CURRENT_SOURCE_DIR}/EXCEPTIONS.md" "${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt"
     ${DDC_THIRD_PARTY_LICENSES})
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${DDC_LICENSE_INPUTS})
-set(DDC_LICENSE_BUNDLE "Diet Dr Camera ${PROJECT_VERSION} - license notices\n\nSource filenames label the full notices reproduced below.\n\n")
+set(DDC_LICENSE_BUNDLE "OmniCam ${PROJECT_VERSION} - license notices\n\nSource filenames label the full notices reproduced below.\n\n")
 foreach(DDC_LICENSE_INPUT IN LISTS DDC_LICENSE_INPUTS)
     file(RELATIVE_PATH DDC_LICENSE_LABEL "${CMAKE_CURRENT_SOURCE_DIR}" "${DDC_LICENSE_INPUT}")
     file(READ "${DDC_LICENSE_INPUT}" DDC_LICENSE_TEXT)
@@ -169,14 +173,33 @@ file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/LicenseNotices.txt" CONTENT "$
 
 if(DDC_BUILD_CHECKS)
     enable_testing()
+    add_executable(DialogueCameraMotionChecks tests/DialogueCameraMotionChecks.cpp)
+    target_include_directories(DialogueCameraMotionChecks PRIVATE include)
+    add_test(NAME DialogueCameraMotionChecks COMMAND DialogueCameraMotionChecks)
+    add_executable(DBVODialogueChecks tests/DBVODialogueChecks.cpp)
+    target_include_directories(DBVODialogueChecks PRIVATE include)
+    add_test(NAME DBVODialogueChecks COMMAND DBVODialogueChecks)
+    add_executable(CrosshairOwnershipChecks tests/CrosshairOwnershipChecks.cpp)
+    target_include_directories(CrosshairOwnershipChecks PRIVATE include)
+    add_test(NAME CrosshairOwnershipChecks COMMAND CrosshairOwnershipChecks)
     add_test(NAME ReleasePackagingChecks COMMAND powershell -NoProfile -ExecutionPolicy Bypass
         -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/ReleasePackagingChecks.ps1"
         -PackageScript "${CMAKE_CURRENT_SOURCE_DIR}/tools/package-release.ps1")
     if(MSVC)
         add_test(NAME RuntimeBinaryChecks COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/RuntimeBinaryChecks.ps1"
-            -Dll "$<TARGET_FILE:DietDrCamera>" -Pdb "$<TARGET_PDB_FILE:DietDrCamera>"
+            -Dll "$<TARGET_FILE:OmniCam>" -Pdb "$<TARGET_PDB_FILE:OmniCam>"
             -Version "${PROJECT_VERSION}" -Verifier "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify-release-binary.ps1")
+        if(CMAKE_GENERATOR MATCHES "Visual Studio")
+            set(_ddc_object_directory "${CMAKE_CURRENT_BINARY_DIR}/OmniCam.dir/$<CONFIG>")
+        elseif(CMAKE_CONFIGURATION_TYPES)
+            set(_ddc_object_directory "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/OmniCam.dir/$<CONFIG>")
+        else()
+            set(_ddc_object_directory "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/OmniCam.dir")
+        endif()
+        add_test(NAME ProjectileImpactABIChecks COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/ProjectileImpactABIChecks.ps1"
+            -ObjectDirectory "${_ddc_object_directory}" -Linker "${CMAKE_LINKER}")
     endif()
     add_executable(TrampolineChecks tests/TrampolineChecks.cpp src/Hooks/HookTrampoline.cpp)
     target_include_directories(TrampolineChecks PRIVATE include)
@@ -234,6 +257,11 @@ if(DDC_BUILD_CHECKS)
         target_compile_options(CameraQualityChecks PRIVATE /utf-8)
     endif()
     add_test(NAME CameraQualityChecks COMMAND CameraQualityChecks)
+    add_executable(SliderApplyChecks tests/SliderApplyChecks.cpp)
+    target_include_directories(SliderApplyChecks PRIVATE include)
+    target_link_libraries(SliderApplyChecks PRIVATE CommonLibSSE::CommonLibSSE tomlplusplus::tomlplusplus)
+    target_precompile_headers(SliderApplyChecks PRIVATE include/PCH.h)
+    add_test(NAME SliderApplyChecks COMMAND SliderApplyChecks)
     add_executable(EntryClipboardChecks tests/EntryClipboardChecks.cpp)
     target_include_directories(EntryClipboardChecks PRIVATE include)
     add_test(NAME EntryClipboardChecks COMMAND EntryClipboardChecks)
@@ -281,6 +309,10 @@ if(DDC_BUILD_CHECKS)
     add_executable(HitShakeChecks tests/HitShakeChecks.cpp)
     target_include_directories(HitShakeChecks PRIVATE include)
     add_test(NAME HitShakeChecks COMMAND HitShakeChecks)
+    add_executable(CombatFOVChecks tests/CombatFOVChecks.cpp)
+    target_include_directories(CombatFOVChecks PRIVATE include)
+    add_test(NAME CombatFOVChecks COMMAND CombatFOVChecks)
+
     add_executable(DamageReactionChecks tests/DamageReactionChecks.cpp)
     target_include_directories(DamageReactionChecks PRIVATE include)
     add_test(NAME DamageReactionChecks COMMAND DamageReactionChecks)
@@ -326,6 +358,9 @@ if(DDC_BUILD_CHECKS)
     add_executable(BleedoutFreeLookChecks tests/BleedoutFreeLookChecks.cpp)
     target_include_directories(BleedoutFreeLookChecks PRIVATE include)
     add_test(NAME BleedoutFreeLookChecks COMMAND BleedoutFreeLookChecks)
+    add_executable(BleedoutEffectsChecks tests/BleedoutEffectsChecks.cpp)
+    target_include_directories(BleedoutEffectsChecks PRIVATE include)
+    add_test(NAME BleedoutEffectsChecks COMMAND BleedoutEffectsChecks)
     add_executable(SpellTrajectoryChecks tests/SpellTrajectoryChecks.cpp)
     target_include_directories(SpellTrajectoryChecks PRIVATE include)
     add_test(NAME SpellTrajectoryChecks COMMAND SpellTrajectoryChecks)

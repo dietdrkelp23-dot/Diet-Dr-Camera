@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 namespace DietDrCamera
 {
     class HookManager
@@ -50,9 +52,10 @@ namespace DietDrCamera
         // on the death-to-main-menu transition.
         static void ReleaseDeathFreeLookInput();
 
+
         // Request the ragdoll-cinematic slow motion to fade back to normal early.
         // Called from the input sink when the ragdoll fade hotkey fires; the
-        // bleedout Update driver consumes it on the next frame.
+        // independent death/ragdoll event driver consumes it on the next frame.
         static void RequestRagdollSlowmoFade();
 
         // Whether the current bleedout was entered by an ACTUAL player death
@@ -186,12 +189,14 @@ namespace DietDrCamera
         static void HookedTogglePOVUpdateHeldState(RE::TogglePOVHandler* a_this, const RE::ButtonEvent* a_event);
         static inline REL::Relocation<decltype(&HookedTogglePOVUpdateHeldState)> _originalTogglePOVUpdateHeldState;
 
-        // Camera-state input is separate from TogglePOVHandler. Preserve the
-        // current orbit across R3 release while chaining all other input work.
+        // Camera-state input is separate from TogglePOVHandler. Suppress the
+        // native R3 POV gesture (zoom and orbit reset); chain all other input.
         // The secondary vtable receives the PlayerInputHandler subobject.
         static void HookedOrbitProcessButton(RE::PlayerInputHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data);
         static inline REL::Relocation<decltype(&HookedOrbitProcessButton)> _originalOrbitProcessButton;
         static inline REL::Relocation<decltype(&HookedOrbitProcessButton)> _originalHorseOrbitProcessButton;
+        static void HookedFirstPersonProcessButton(RE::PlayerInputHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data);
+        static inline REL::Relocation<decltype(&HookedFirstPersonProcessButton)> _originalFirstPersonProcessButton;
 
     public:
         // Raw gamepad R3-release sink. Subscribes to the BSInputDeviceManager's
@@ -326,9 +331,14 @@ namespace DietDrCamera
         // no unverified relocated-prologue/forward-pointer is used.
         enum class CasterPatchState { kOriginal, kFalseStub, kDivert };
         static inline std::uintptr_t    cameraCasterAddr       = 0;
-        static inline std::uint8_t      cameraCasterOrigBytes[6]{};
+        static inline std::array<std::uint8_t, 6> cameraCasterOrigBytes{};
+        static inline constexpr std::array<std::uint8_t, 6> cameraCasterFalseBytes{0x31, 0xC0, 0xC3, 0x90, 0x90, 0x90};
         static inline std::uintptr_t    cameraCasterDivertStub = 0;
+        static inline std::array<std::uint8_t, 6> cameraCasterDivertBytes{};
         static inline CasterPatchState  cameraCasterState      = CasterPatchState::kOriginal;
+        static inline bool cameraCasterConflict = false;
+        static bool PatchCameraCasterEntry(const std::array<std::uint8_t, 6>& expected,
+            const std::array<std::uint8_t, 6>& replacement);
         static void UpdateCameraCasterPatch();
 
         // SmoothCam's verified typedef: bool(__fastcall*)(void* physics,

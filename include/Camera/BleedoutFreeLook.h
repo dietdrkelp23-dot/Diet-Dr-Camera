@@ -37,7 +37,27 @@ namespace DietDrCamera
         [[nodiscard]] double Pitch() const { return _pitch; }
         [[nodiscard]] double Roll() const { return _roll; }
 
+        // Follow a camera owned by target lock without modifying its pose.
+        // Unlock resumes from the latest tracked view, not the death entry.
+        void Follow(const float matrix[3][3], double now, bool inputAllowed)
+        {
+            if (!std::isfinite(now) || !Capture(matrix)) return;
+            _lastTime = now;
+            _inputWasAllowed = inputAllowed;
+        }
+
         void Update(float matrix[3][3], const Input& input, double now, bool inputAllowed)
+        {
+            const double elapsed = now - _lastTime;
+            const double dt = std::clamp(elapsed, 0.0, 0.1);
+            const Stick stick = FilterStick(input.stickX, input.stickY);
+            UpdateRadians(matrix, stick.x * kStickSpeed * dt + input.mouseX * kMouseSpeed,
+                stick.y * kStickSpeed * dt - input.mouseY * kMouseSpeed, now, inputAllowed);
+        }
+
+        // Gameplay supplies angles already produced by the native look-input
+        // pipeline. Never apply a second sensitivity, deadzone, or frame scale.
+        void UpdateRadians(float matrix[3][3], double yawDelta, double pitchDelta, double now, bool inputAllowed)
         {
             if (!std::isfinite(now)) return;
             if (!_active) {
@@ -45,18 +65,10 @@ namespace DietDrCamera
                 _lastTime = now;
             }
             const double elapsed = now - _lastTime;
-            _lastTime = now;  // also advance while blocked; menus never bank time
-            // Discard the first sample on entry/resume (including queued mouse
-            // counts). A long gap can be a paused engine or a load, not play time.
-            if (inputAllowed && _inputWasAllowed && elapsed > 0.0 && elapsed <= 0.25) {
-                const double dt = (std::min)(elapsed, 0.1);
-                const Stick stick = FilterStick(input.stickX, input.stickY);
-                _yaw = std::remainder(_yaw + stick.x * kStickSpeed * dt +
-                    input.mouseX * kMouseSpeed, 2.0 * kPi);
-                const double pitchDelta = stick.y * kStickSpeed * dt - input.mouseY * kMouseSpeed;
-                // Preserve the established stick/mouse directions. If vanilla
-                // starts beyond our input limit, allow movement back inward
-                // without snapping that opening view onto the limit.
+            _lastTime = now;
+            if (inputAllowed && _inputWasAllowed && elapsed > 0.0 && elapsed <= 0.25 &&
+                std::isfinite(yawDelta) && std::isfinite(pitchDelta)) {
+                _yaw = std::remainder(_yaw + yawDelta, 2.0 * kPi);
                 _pitch = std::clamp(_pitch + pitchDelta,
                     (std::min)(_pitch, -kPitchLimit), (std::max)(_pitch, kPitchLimit));
             }

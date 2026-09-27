@@ -1,0 +1,9 @@
+Use case: logo-brand
+Asset type: Nexus Mods thumbnail for OmniCam, landscape 16:9.
+Primary request: Make a basic close adaptation of the supplied SmoothCam thumbnail, changing the name to OmniCam and adding an infinity symbol.
+Input image 1: SmoothCam reference for the black background, white lettering, letterforms, and minimal visual style.
+Background: completely solid pure black.
+Text (verbatim): "OmniCam" — capital O and capital C, all other letters lowercase. Spell exactly O-m-n-i-C-a-m. Use the same large, crisp white, Skyrim-like angular serif lettering seen in the reference, matching its recognizable shapes and weight as closely as possible. Center the wordmark horizontally and make it span about 82% of the canvas width.
+Add one simple flat white infinity symbol centered above the wordmark, around 22% of the canvas width, with a clear gap so it does not touch the letters. Keep the symbol visually restrained and symmetrical.
+Composition: wordmark and infinity together form one centered arrangement with generous black space; landscape 16:9 at 1920x1080 or the closest supported size.
+Constraints: only the exact text OmniCam and the infinity symbol on black. No subtitle, no other words, no SmoothCam text, no characters, no scenery, no gradients, no metallic effects, no shadows, no glow, no frame, no textures. Crisp clean antialiased edges.

@@ -14,6 +14,7 @@ namespace DietDrCamera::CreatureMagic
         int casting = 0, delivery = 0, school = -1;
         bool hostile = false, detrimental = false, missile = false, continuous = false;
         bool fire = false, frost = false, shock = false;
+        bool beam = false;
     };
     using Kind = DamageReaction::Kind;
 
@@ -38,7 +39,7 @@ namespace DietDrCamera::CreatureMagic
         if (AffectsHealth(e) || Control(e)) return true;
         if (ValueEffect(e.archetype)) return e.primary == 25 || e.primary == 26;
         // A hostile projectile may deliver scripted damage instead of an AV.
-        return e.archetype == 1 && e.missile;
+        return e.archetype == 1 && (e.missile || e.beam);
     }
     inline Kind EffectKind(const Effect& e)
     {
@@ -69,7 +70,7 @@ namespace DietDrCamera::CreatureMagic
             if (e.casting != 1 || e.delivery == 0 || e.continuous) return;
             // Direct damage without a projectile is already observed at its
             // value application. A control effect has no health tick at all.
-            if ((!e.missile || e.delivery == 1) && AffectsHealth(e)) return;
+            if (((!e.missile && !e.beam) || e.delivery == 1) && AffectsHealth(e)) return;
             auto kind = EffectKind(e);
             if (kind == Kind::Poison && e.missile && e.delivery != 1) kind = Kind::VenomSpit;
             const int rank = kind == Kind::Web ? 4 : AffectsHealth(e) ? 3 : kind == Kind::Drain ? 2 : 1;

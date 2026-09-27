@@ -5,6 +5,7 @@
 namespace DietDrCamera::HookTrampoline
 {
     // Five 14-byte call stubs plus the 14-byte camera-collision stub use 84 bytes.
+    // The camera-state entry guard adds a 19-byte replay and 14-byte branch.
     // Keep headroom for additional hooks, including the dormant 8-byte menu hook.
     inline constexpr std::size_t capacity = 256;
 

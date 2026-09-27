@@ -385,7 +385,8 @@ namespace DietDrCamera
 
     void CrosshairManager::ResetTracing()
     {
-        if (baselineCaptured_) { RestoreCrosshair(); RestoreStealthMeter(); }
+        if (crosshairOwnership_.ClearTrajectory()) RestoreCrosshair();
+        RestoreStealthMeter();
         { std::scoped_lock lock(firedShotsMutex_); firedShots_.clear(); }
         { std::scoped_lock lock(liveSpellPreviewsMutex_); liveSpellPreviews_.clear(); }
         { std::scoped_lock lock(trajectoryMutex_); trajectoryHud_.clear(); showTrajectory_ = false; }
@@ -397,7 +398,6 @@ namespace DietDrCamera
         magicLastChargeSec_ = lastBowFireWallSec_ = -1000;
         lastTickWallSec_ = -1;
         lastMode_ = AimMode::None;
-        crosshairOverrideActive_.store(false, std::memory_order_release);
         ArrowPathDetour::InvalidateCameraSnapshot();
         MissileProjectileDetour::InvalidateReleaseCapture();
         DiscardPendingFireEvents(false);
@@ -1575,6 +1575,19 @@ namespace DietDrCamera
         haveLastWritten_ = true;
     }
 
+    void CrosshairManager::SetDisplayVisibility(bool visible)
+    {
+        auto* ui = RE::UI::GetSingleton();
+        const auto hud = ui ? ui->GetMenu<RE::HUDMenu>() : nullptr;
+        if (!hud) return;
+        RE::GFxValue crosshair;
+        if (hud->GetRuntimeData().root.GetMember("Crosshair", &crosshair)) {
+            RE::GFxValue::DisplayInfo info;
+            info.SetVisible(visible);
+            crosshair.SetDisplayInfo(info);
+        }
+    }
+
     namespace
     {
         // Look up the player's nocked-arrow node — this is the world
@@ -1937,7 +1950,7 @@ namespace DietDrCamera
                 trajectoryHud_.clear();
             }
             showTrajectory_ = false;
-            crosshairOverrideActive_.store(false, std::memory_order_release);
+            crosshairOwnership_.ClearTrajectory();
             smoothedValid_ = false;
             return false;
         }
@@ -2213,34 +2226,8 @@ namespace DietDrCamera
             // SmoothCam owns the crosshair — it also owns sneak meter
             // policy. Stand down on both.
             if (baselineCaptured_) RestoreStealthMeter();
-            crosshairOverrideActive_.store(false, std::memory_order_release);
+            crosshairOwnership_.ClearTrajectory();
             return;
-        }
-
-        // Master toggle. The camera-aim snapshot drives BOTH archery
-        // and spell-projectile true-aim (different vtables, same
-        // snapshot source), so we only restore vanilla + invalidate
-        // the snapshot when BOTH features are off. With only one off,
-        // we keep publishing the snapshot so the other detour still
-        // gets a valid target — the downstream archery prediction UI
-        // is gated on bow-draw state below and is a no-op for spell
-        // casting anyway.
-        {
-            const bool anyTracingOn = ActiveTracingSettings().Enabled();
-            if (!anyTracingOn) {
-                if (baselineCaptured_) {
-                    RestoreCrosshair();
-                    RestoreStealthMeter();
-                }
-                smoothedValid_ = false;
-                crosshairOverrideActive_.store(false, std::memory_order_release);
-                ArrowPathDetour::InvalidateCameraSnapshot();
-                // No anchors to learn with tracing off, but the ring still
-                // has to be kept empty or turning tracing back on replays
-                // everything cast while it was off.
-                DiscardPendingFireEvents(false);
-                return;
-            }
         }
 
         // Target Lock: hand the crosshair back to the engine / TDM.
@@ -2253,12 +2240,12 @@ namespace DietDrCamera
         // (pre-lock) target point.
         const bool tdmLocked = TDMIntegration::GetSingleton().IsTargetLocked();
         if (tdmLocked) {
-            if (baselineCaptured_) {
-                RestoreCrosshair();
-                RestoreStealthMeter();
-            }
+            // Restore only a transform written by trajectory tracing.
+            if (crosshairOwnership_.ClearTrajectory()) RestoreCrosshair();
+            RestoreStealthMeter();
+            stealthEchoActive_.store(false, std::memory_order_release);
             smoothedValid_ = false;
-            crosshairOverrideActive_.store(false, std::memory_order_release);
+            lastMode_ = AimMode::None;
             ArrowPathDetour::InvalidateCameraSnapshot();
             lastTDMLocked_ = true;
             // Consume anything fired during the lock RIGHT NOW, while we
@@ -2267,33 +2254,39 @@ namespace DietDrCamera
             DiscardPendingFireEvents(ActiveTracingSettings().spellEnabled);
             return;
         }
-        // Falling edge of TDM lock — RestoreCrosshair wrote
-        // DisplayInfo.SetVisible(false) every frame during the lock and
-        // that flag survives on the GFx Crosshair object. For melee /
-        // magic / unarmed (mode==None below), the engine never writes
-        // visible=true on its own, so the cursor stays hidden until the
-        // user sheathes. Force visible=true once to release the cursor;
-        // the engine's natural show/hide takes over from here.
+        // Release visibility once; leave transform ownership with the HUD.
         if (lastTDMLocked_ && !tdmLocked) {
-            if (auto* uiNow = RE::UI::GetSingleton()) {
-                if (auto hudPtr = uiNow->GetMenu(RE::HUDMenu::MENU_NAME)) {
-                    auto* hud = static_cast<RE::HUDMenu*>(hudPtr.get());
-                    if (hud) {
-                        auto& runtime = hud->GetRuntimeData();
-                        RE::GFxValue ch;
-                        if (runtime.root.GetMember("Crosshair", &ch)) {
-                            RE::GFxValue::DisplayInfo di;
-                            di.SetVisible(true);
-                            ch.SetDisplayInfo(di);
-                        }
-                    }
-                }
-            }
+            SetDisplayVisibility(true);
             // Drop the SetCrosshairEnabled deduper too — engine writes
             // post-lock should land instead of being suppressed.
             haveLastWritten_ = false;
         }
         lastTDMLocked_ = false;
+
+        // Master toggle. The camera-aim snapshot drives BOTH archery
+        // and spell-projectile true-aim (different vtables, same
+        // snapshot source), so we only restore vanilla + invalidate
+        // the snapshot when BOTH features are off. With only one off,
+        // we keep publishing the snapshot so the other detour still
+        // gets a valid target — the downstream archery prediction UI
+        // is gated on bow-draw state below and is a no-op for spell
+        // casting anyway.
+        {
+            const bool anyTracingOn = ActiveTracingSettings().Enabled();
+            if (!anyTracingOn) {
+                if (crosshairOwnership_.ClearTrajectory()) RestoreCrosshair();
+                RestoreStealthMeter();
+                smoothedValid_ = false;
+                stealthEchoActive_.store(false, std::memory_order_release);
+                ArrowPathDetour::InvalidateCameraSnapshot();
+                // No anchors to learn with tracing off, but the ring still
+                // has to be kept empty or turning tracing back on replays
+                // everything cast while it was off.
+                DiscardPendingFireEvents(false);
+                return;
+            }
+        }
+
 
         auto* ui = RE::UI::GetSingleton();
         if (!ui) return;
@@ -2491,7 +2484,7 @@ namespace DietDrCamera
             // target.
             smoothedValid_         = false;
             stringWasTautLast_     = false;
-            crosshairOverrideActive_.store(false, std::memory_order_release);
+            crosshairOwnership_.ClearTrajectory();
             return;
         }
 
@@ -3032,7 +3025,7 @@ namespace DietDrCamera
             echoScaleX_ = base_.xScale * smoothedSize_;
             echoScaleY_ = base_.yScale * smoothedSize_;
         }
-        crosshairOverrideActive_.store(true, std::memory_order_release);
+        crosshairOwnership_.ClaimTrajectory();
 
         // Mode-change diagnostic + periodic dump (every 60 frames so
         // we get a tighter cadence near a fired shot).
@@ -3104,7 +3097,7 @@ namespace DietDrCamera
         // but the engine reset slipped in afterward; re-issuing here
         // (DURING HUD render) clobbers the reset before the frame
         // ships. Cheap one-write fast path: skip when not active.
-        if (crosshairOverrideActive_.load(std::memory_order_acquire) &&
+        if (crosshairOwnership_.EchoTrajectory() &&
             !cursorMaskActive_.load(std::memory_order_acquire))
         {
             double sx, sy, scaleX, scaleY;

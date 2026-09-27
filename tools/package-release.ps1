@@ -15,11 +15,11 @@ if ($cache -notmatch '(?m)^DDC_DEPLOY_TO_MO2:BOOL=OFF\r?$' -or
     throw 'Configure with DDC_DEPLOY_TO_MO2=OFF and DDC_BUILD_CHECKS=ON first (see README.md).'
 }
 $cmakeText = Get-Content -LiteralPath (Join-Path $repo 'CMakeLists.txt') -Raw
-$version = [regex]::Match($cmakeText, '(?s)project\(\s*DietDrCamera\s+VERSION\s+(\d+\.\d+\.\d+)').Groups[1].Value
+$version = [regex]::Match($cmakeText, '(?s)project\(\s*OmniCam\s+VERSION\s+(\d+\.\d+\.\d+)').Groups[1].Value
 if (-not $version) { throw 'Could not read the project version.' }
 $vcpkg = Get-Content -LiteralPath (Join-Path $repo 'vcpkg.json') -Raw | ConvertFrom-Json
 if ($vcpkg.'version-string' -ne $version) { throw 'vcpkg manifest version is out of sync.' }
-foreach ($document in @('RELEASE-NOTES.md', 'Diet Dr Camera - Requirements and Credits.txt')) {
+foreach ($document in @('RELEASE-NOTES.md', 'OmniCam - Requirements and Credits.txt')) {
     $firstLine = Get-Content -LiteralPath (Join-Path $repo $document) -TotalCount 1
     if (-not $firstLine.Contains($version)) { throw "Release text version is out of sync: $document" }
 }
@@ -28,18 +28,42 @@ if (Test-Path -LiteralPath $output) { throw 'Candidate output already exists.' }
 $stage = Join-Path $output 'stage'
 New-Item -ItemType Directory -Path $stage | Out-Null
 
-function Invoke-Checked([string]$Program, [string[]]$Arguments, [string]$Log) {
-    # Windows PowerShell 5 turns ordinary native stderr (including CMake status
-    # messages) into ErrorRecords. Judge native tools by their exit code while
-    # preserving both streams in the log; a status message is not a build failure.
+function Invoke-BackgroundTool([string]$Program, [string[]]$Arguments) {
     $application = (Get-Command $Program -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-    $previousPreference = $ErrorActionPreference
+    # Quote each Windows argv entry, including embedded quotes and trailing slashes.
+    $quoted = @($Arguments | ForEach-Object {
+        $argument = [regex]::Replace($_, '(\\*)"', '$1$1\"')
+        $argument = [regex]::Replace($argument, '(\\+)$', '$1$1')
+        '"' + $argument + '"'
+    })
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $application
+    $startInfo.Arguments = $quoted -join ' '
+    $startInfo.WorkingDirectory = $repo
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $child = [System.Diagnostics.Process]::Start($startInfo)
     try {
-        $ErrorActionPreference = 'Continue'
-        & $application @Arguments 2>&1 | ForEach-Object { $_.ToString() } | Tee-Object -FilePath $Log
-        $exitCode = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $previousPreference }
-    if ($exitCode -ne 0) { throw "$Program failed with exit code $exitCode (see $Log)." }
+        $stdout = $child.StandardOutput.ReadToEndAsync()
+        $stderr = $child.StandardError.ReadToEndAsync()
+        $child.WaitForExit()
+        [pscustomobject]@{ ExitCode = $child.ExitCode; Stdout = $stdout.GetAwaiter().GetResult(); Stderr = $stderr.GetAwaiter().GetResult() }
+    } finally { $child.Dispose() }
+}
+function Invoke-Checked([string]$Program, [string[]]$Arguments, [string]$Log) {
+    $result = Invoke-BackgroundTool $Program $Arguments
+    $text = $result.Stdout + $result.Stderr
+    [IO.File]::WriteAllText($Log, $text)
+    Write-Host $text
+    if ($result.ExitCode -ne 0) { throw "$Program failed with exit code $($result.ExitCode) (see $Log)." }
+}
+function Invoke-Git([string[]]$Arguments) {
+    $result = Invoke-BackgroundTool 'git' $Arguments
+    if ($result.ExitCode -ne 0) { throw "git failed: $($result.Stderr)" }
+    $result.Stdout -split '\r?\n' | Where-Object { $_.Length -gt 0 }
 }
 function Get-Records([string]$Root) {
     @(Get-ChildItem -LiteralPath $Root -Recurse -File | Sort-Object FullName | ForEach-Object {
@@ -76,20 +100,20 @@ try {
     $roots = @('src', 'include', 'cmake', 'tests', 'tools', 'dist', 'licenses', 'nexus', 'extern/CommonLibSSE-NG', 'extern/minhook')
     $docs = @('CMakeLists.txt', 'vcpkg.json', 'README.md', 'BUILDING.md', 'RUNTIME-TESTING.md', 'SOURCE-PROVENANCE.md', 'LICENSE.txt', 'LICENSING.md', 'EXCEPTIONS.md', 'PRESET-COMPAT.md', 'PRESET-AUTHORS.md', 'RELEASE-NOTES.md', 'RUNTIME-SUPPORT.md',
               'RELEASE-CHECKLIST.md', 'RUNTIME-MATRIX.md', 'RUNTIME-COMPATIBILITY-AUDIT.md',
-              'SUPPORT-LOGGING.md', 'DAMAGE-REACTION-COVERAGE.md', 'CINEMATIC-VIEWS.md',
+              'RUNTIME-LIVE-RESULTS.md', 'RUNTIME-LIVE-TESTING.md',
+              'SUPPORT-LOGGING.md', 'DBVO-COMPATIBILITY.md', 'DAMAGE-REACTION-COVERAGE.md', 'CINEMATIC-VIEWS.md',
+              'CBPC-STARTUP-FIX.md', 'RUNTIME-DEEP-AUDIT.md',
               'REQUIREMENTS.txt', 'CREDITS.txt', 'THIRD-PARTY-NOTICES.txt',
-              'Diet Dr Camera - Requirements and Credits.txt')
+              'OmniCam - Requirements and Credits.txt')
     $hasGit = (Test-Path -LiteralPath (Join-Path $repo '.git')) -and ($null -ne (Get-Command git -ErrorAction SilentlyContinue))
     $hasVendorGit = $hasGit -and (Test-Path -LiteralPath (Join-Path $repo 'extern/CommonLibSSE-NG/.git'))
     if ($hasGit) {
-        $paths = @(& git -c core.quotepath=false ls-files --cached --others --exclude-standard -- @roots @docs |
+        $paths = @(Invoke-Git (@('-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard', '--') + $roots + $docs) |
             Sort-Object -Unique | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-        if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate the working source.' }
         # Development uses a gitlink; the public repository tracks the vendor
         # files directly. Never mistake the parent repository for vendor Git.
         if ($hasVendorGit) {
-            $vendorPaths = @(& git -C extern/CommonLibSSE-NG -c core.quotepath=false ls-files --cached --others --exclude-standard)
-            if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate bundled CommonLib source.' }
+            $vendorPaths = @(Invoke-Git @('-C', 'extern/CommonLibSSE-NG', '-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard'))
             $paths += @($vendorPaths | ForEach-Object { 'extern/CommonLibSSE-NG/' + $_ } |
                 Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
         }
@@ -124,7 +148,9 @@ try {
     Invoke-Checked 'python' @((Join-Path $PSScriptRoot 'package-dependency-sources.py'),
         '--installed', $installed, '--vcpkg', $vcpkgRoot, '--output', (Join-Path $source 'dependency-sources')) (Join-Path $output 'dependency-sources.log')
     $sourceRecords = Get-Records $source
-    Invoke-Checked 'cmake' @('--build', $build, '--config', 'Release', '--parallel', '4') (Join-Path $output 'build.log')
+    # Restored source snapshots can have older mtimes than compiled objects.
+    # A release must compile its captured source rather than reuse those objects.
+    Invoke-Checked 'cmake' @('--build', $build, '--config', 'Release', '--clean-first', '--parallel', '4') (Join-Path $output 'build.log')
     Invoke-Checked 'ctest' @('--test-dir', $build, '-C', 'Release', '--output-on-failure', '--no-tests=error') (Join-Path $output 'checks.log')
     Invoke-Checked 'cmake' @('--install', $build, '--config', 'Release', '--component', 'DDC', '--prefix', $stage) (Join-Path $output 'install.log')
     $symbols = Join-Path $output 'symbols'
@@ -164,8 +190,8 @@ try {
         }
     }
     Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-    $mainZip = Join-Path $output "Diet Dr Camera-$version.zip"
-    $sourceZip = Join-Path $output "Diet Dr Camera - Source-$version.zip"
+    $mainZip = Join-Path $output "OmniCam-$version.zip"
+    $sourceZip = Join-Path $output "OmniCam - Source-$version.zip"
     New-VerifiedZip $stage $mainZip $records
     New-VerifiedZip $source $sourceZip $sourceRecords
     $revision = $null
@@ -173,16 +199,12 @@ try {
     $vendorStatus = @()
     $status = @()
     if ($hasGit) {
-        $revision = & git rev-parse HEAD
-        if ($LASTEXITCODE -ne 0) { throw 'Could not record Git revision.' }
-        $status = @(& git status --short -- @roots @docs)
-        if ($LASTEXITCODE -ne 0) { throw 'Could not record working tree changes.' }
+        $revision = Invoke-Git @('rev-parse', 'HEAD')
+        $status = @(Invoke-Git (@('status', '--short', '--') + $roots + $docs))
     }
     if ($hasVendorGit) {
-        $vendorRevision = & git -C extern/CommonLibSSE-NG rev-parse HEAD
-        if ($LASTEXITCODE -ne 0) { throw 'Could not record CommonLib revision.' }
-        $vendorStatus = @(& git -C extern/CommonLibSSE-NG status --short)
-        if ($LASTEXITCODE -ne 0) { throw 'Could not record CommonLib changes.' }
+        $vendorRevision = Invoke-Git @('-C', 'extern/CommonLibSSE-NG', 'rev-parse', 'HEAD')
+        $vendorStatus = @(Invoke-Git @('-C', 'extern/CommonLibSSE-NG', 'status', '--short'))
     }
     $manifest = [ordered]@{
         version = $version; status = 'automated release checks passed - see RELEASE-CHECKLIST.md for gameplay acceptance';

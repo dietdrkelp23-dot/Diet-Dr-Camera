@@ -1,9 +1,11 @@
+#include "Hooks/CameraStateEntry.h"
 #include "Hooks/RuntimePatchInspection.h"
 
 #include <array>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -128,6 +130,67 @@ namespace
         }
     }
 
+    void EntryJumpChecks()
+    {
+        // Exact CBPC entry detour/prologue from the 1.7.104 startup report.
+        // The eight bytes at +6 are a pointer, not engine instructions.
+        constexpr std::uintptr_t base = 0x7FF6ED740000 + 0x658870;
+        constexpr std::uintptr_t target = 0x7FF6ED740000 + 0xCDFE00;
+        std::vector<std::uint8_t> code{
+            0xFF,0x25,0,0,0,0,0x10,0x42,0x92,0xDD,0xFE,0x7F,0,0,
+            0x90,0x90,0x90,0x90,0x90,
+            0x48,0xC7,0x84,0x24,0x28,0x01,0,0,0xFE,0xFF,0xFF,0xFF,
+            0x48,0x89,0x58,0x08,0x48,0x89,0x70,0x10,0x48,0x89,0x78,0x18,
+            0x48,0x8D,0x6C,0x24,0x60,0x48,0x83,0xE5,0xC0,0x4C,0x8B,0xE1
+        };
+        const auto callOffset = code.size();
+        Call(code, base, target);
+        code.push_back(0xC3);
+        const auto decoded = Decode(code, base);
+        Check(decoded.has_value(), "decode the reported CBPC entry detour without interpreting its pointer as code");
+        Check(InlineEntryJumpTarget(code) == 0x7FFEDD924210, "identify the reported CBPC callback address");
+        Check(UniqueCall(*decoded, target) == callOffset, "find the native call after the CBPC entry detour");
+        const auto call = CallAt(code, base, callOffset);
+        Check(call && call->target == target, "validate an established call after an entry detour");
+
+        std::uint64_t random = 0xDDC170104;
+        for (unsigned trial = 0; trial < 4096; ++trial) {
+            random = random * 6364136223846793005ULL + 1442695040888963407ULL;
+            std::memcpy(code.data()+6, &random, sizeof(random));
+            const auto varied = Decode(code, base);
+            Check(varied && UniqueCall(*varied, target) == callOffset,
+                "ASLR pointer bytes must not change native call discovery");
+        }
+
+        for (std::size_t size = 6; size < 14; ++size) {
+            const auto truncated = std::span<const std::uint8_t>(code).first(size);
+            Check(!InlineEntryJumpTarget(truncated) && !Decode(truncated, base), "reject a truncated inline jump pointer");
+        }
+        // A pointer that happens to encode a matching E8 call must never be
+        // counted or accepted as a hook site, even if the real call is absent.
+        code.resize(14);
+        code[6] = 0xE8;
+        const auto fakeDisplacement = static_cast<std::int32_t>(target - (base + 6 + 5));
+        std::memcpy(code.data()+7, &fakeDisplacement, sizeof(fakeDisplacement));
+        code[11] = 0x60;
+        Check(!UniqueCall(*Decode(code, base), target), "ignore fake native calls inside the detour pointer");
+        Check(!CallAt(code, base, 6), "an inline pointer cannot be an established call site");
+        Call(code, base, target);
+        Check(UniqueCall(*Decode(code, base), target) == 14, "retain a real call immediately after the detour pointer");
+        Call(code, base, target);
+        Check(!UniqueCall(*Decode(code, base), target), "reject ambiguous native calls after an entry detour");
+        code[14] = 0x60;
+        Check(!Decode(code, base), "do not skip invalid body instructions after an entry detour");
+
+        code.resize(14);
+        code[6] = 0x60;
+        code[2] = 1;
+        Check(!InlineEntryJumpTarget(code) && !Decode(code, base), "do not treat a different RIP displacement as inline data");
+        code[2] = 0;
+        code.insert(code.begin(), 0x90);
+        Check(!InlineEntryJumpTarget(code) && !Decode(code, base), "limit inline detour recognition to the function entry");
+    }
+
     void EngineChecks(const char* path)
     {
         std::ifstream file(path);
@@ -160,7 +223,40 @@ namespace
 int main(int argc, char** argv)
 {
     try {
+        {
+            using namespace DietDrCamera::CameraStateEntry;
+            constexpr std::uintptr_t resume = 0x7FF612345005;
+            const auto gateway = Gateway(prologue, resume);
+            Check(gateway.has_value(), "Accept reviewed camera SetState entry");
+            const auto spill = Decode(std::span<const std::uint8_t>(*gateway).first(5), 0x1000);
+            Check(spill && spill->size() == 1 && spill->front().length == 5,
+                "Gateway must replay exactly one complete stack-home instruction");
+            std::uintptr_t destination{};
+            std::memcpy(&destination, gateway->data() + 11, sizeof(destination));
+            Check(destination == resume && (*gateway)[5] == 0xFF && (*gateway)[6] == 0x25,
+                "Gateway must jump to the full continuation address without clobbering registers");
+            for (std::size_t i = 0; i < prologue.size(); ++i) {
+                auto changed = prologue;
+                changed[i] ^= 0x01;
+                Check(!Gateway(changed, resume), "Changed camera entry was accepted for overwrite");
+                Check(!Gateway(std::span<const std::uint8_t>(prologue).first(i), resume),
+                    "Truncated camera entry was accepted");
+            }
+            Check(!Gateway(prologue, 0), "Null camera continuation was accepted");
+        }
         SyntheticChecks();
+        EntryJumpChecks();
+        constexpr std::uintptr_t jump = 0x100000000;
+        for (const auto displacement : {std::int64_t{-2147483648LL}, std::int64_t{-1}, std::int64_t{0}, std::int64_t{2147483647}}) {
+            const auto target = static_cast<std::uintptr_t>(jump + 5 + displacement);
+            const auto patch = RelativeJump6(jump, target);
+            Check(patch && patch->back() == 0x90, "encode a reachable collision diversion");
+            const auto decoded = Decode(*patch, jump);
+            Check(decoded && decoded->front().target == target, "collision diversion retains the full target address");
+        }
+        Check(!RelativeJump6(jump, jump + 5 + 0x80000000ULL), "reject positive rel32 overflow");
+        Check(!RelativeJump6(jump, jump + 5 - 0x80000001ULL), "reject negative rel32 overflow");
+        Check(!RelativeJump6(std::numeric_limits<std::uintptr_t>::max(), 0), "reject instruction-address overflow");
         if (argc==2) EngineChecks(argv[1]);
         std::cout << "Runtime hook checks passed\n";
         return 0;

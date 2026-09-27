@@ -4,13 +4,59 @@
 #include <array>
 #include <cstring>
 #include <hde64.h>
+#include <limits>
 
 namespace DietDrCamera::RuntimePatchInspection
 {
+    namespace
+    {
+        constexpr std::array<std::uint8_t, 6> inlineEntryJump{0xFF, 0x25, 0, 0, 0, 0};
+        constexpr std::size_t inlineEntryJumpSize = inlineEntryJump.size() + sizeof(std::uintptr_t);
+
+        bool HasInlineEntryJump(std::span<const std::uint8_t> code)
+        {
+            return code.size() >= inlineEntryJump.size() &&
+                std::equal(inlineEntryJump.begin(), inlineEntryJump.end(), code.begin());
+        }
+    }
+
+    std::optional<std::uintptr_t> InlineEntryJumpTarget(std::span<const std::uint8_t> code)
+    {
+        if (code.size() < inlineEntryJumpSize || !HasInlineEntryJump(code)) return std::nullopt;
+        std::uintptr_t target{};
+        std::memcpy(&target, code.data() + inlineEntryJump.size(), sizeof(target));
+        return target;
+    }
+
+    std::optional<std::array<std::uint8_t, 6>> RelativeJump6(std::uintptr_t address, std::uintptr_t target)
+    {
+        if (address > std::numeric_limits<std::uintptr_t>::max() - 5) return std::nullopt;
+        const auto next = address + 5;
+        const auto distance = target >= next ? target - next : next - target;
+        const auto limit = static_cast<std::uintptr_t>(std::numeric_limits<std::int32_t>::max()) + (target < next ? 1 : 0);
+        if (distance > limit) return std::nullopt;
+        const auto displacement = static_cast<std::int32_t>(target >= next ?
+            static_cast<std::int64_t>(distance) : -static_cast<std::int64_t>(distance));
+        std::array<std::uint8_t, 6> patch{0xE9, 0, 0, 0, 0, 0x90};
+        std::memcpy(patch.data() + 1, &displacement, sizeof(displacement));
+        return patch;
+    }
+
     std::optional<Instructions> Decode(std::span<const std::uint8_t> code, std::uintptr_t address)
     {
         Instructions result;
-        for (std::size_t offset = 0; offset < code.size();) {
+        std::size_t offset = 0;
+        if (HasInlineEntryJump(code)) {
+            const auto target = InlineEntryJumpTarget(code);
+            if (!target) return std::nullopt;
+            // CBPC and other entry detours embed a pointer after the jump.
+            // It can contain invalid opcodes or fake E8 calls, depending on
+            // ASLR. Keep the six-byte instruction and skip only its data;
+            // original body offsets and all subsequent checks stay intact.
+            result.push_back({0, inlineEntryJump.size(), 0xFF, 0, *target});
+            offset = inlineEntryJumpSize;
+        }
+        for (; offset < code.size();) {
             // The decoder may read ahead. Padding keeps truncated instructions inside our buffer.
             std::array<std::uint8_t, 32> buffer{};
             std::memcpy(buffer.data(), code.data() + offset, std::min(buffer.size(), code.size() - offset));

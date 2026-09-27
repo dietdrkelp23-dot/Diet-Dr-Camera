@@ -19,6 +19,9 @@ namespace DietDrCamera
         bool tab = false;
         float clipX0 = -3.4e38f, clipY0 = -3.4e38f;
         float clipX1 = 3.4e38f, clipY1 = 3.4e38f;
+        // Optional primary control for a single-column tab, independent of
+        // where the tab label sits horizontally. Zero keeps spatial navigation.
+        std::uint32_t entryTab = 0;
 
         float RegionX0() const { return std::max(wx0, clipX0); }
         float RegionY0() const { return std::max(wy0, clipY0); }
@@ -49,6 +52,22 @@ namespace DietDrCamera
                 (dx == 0) == (dy == 0)) return -1;
             const auto& from = items[current];
             if (from.layer != activeLayer) return -1;
+            // A tab can explicitly enter its leading toggle. Keep this route
+            // local to the live window/layer, and fall back to geometry when
+            // either endpoint is absent or clipped. Reset the remembered lane
+            // so the next step starts from the control we actually entered.
+            if (dx == 0 && ((dy > 0 && from.tab) || (dy < 0 && from.entryTab != 0))) {
+                for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+                    const auto& to = items[i];
+                    const bool linked = dy > 0 ? from.id != 0 && to.entryTab == from.id
+                        : to.tab && to.id == from.entryTab;
+                    if (i == current || !linked || to.layer != activeLayer || !from.SameWindow(to) ||
+                        !to.Visible() || to.x1 <= to.x0 || to.y1 <= to.y0) continue;
+                    if (dy > 0 ? to.y0 < from.y1 - 1.0f : to.y1 > from.y0 + 1.0f) continue;
+                    Reset();
+                    return i;
+                }
+            }
             const bool vertical = dy != 0;
             if (!_hasLane || _vertical != vertical || _itemID != from.id || _layer != from.layer) {
                 _lane = vertical
@@ -119,28 +138,54 @@ namespace DietDrCamera
                     ? (dy > 0 ? to.RegionY0() - fy1 : fy0 - to.RegionY1())
                     : (dx > 0 ? to.RegionX0() - fx1 : fx0 - to.RegionX1());
                 const float regionGap = std::max({fromLo - regionHi, regionLo - fromHi, 0.0f});
-                const bool enteringPane = entryForward >= -epsilon &&
-                    (vertical || regionGap <= std::max(entryForward * 0.75f, rowHeight * 2.0f));
+                // A short auto-sized list can end above the current slider.
+                // Its window still forms a neighboring column of the editor
+                // (which may live directly in the parent). Enter that column
+                // even when no row is level with the cursor. Same-column
+                // controls retain the diagonal-jump limit below.
+                // An ancestor window also owns toolbars above the child.
+                // Their full-window bounds must not masquerade as the editor
+                // beside the list; use ordinary geometry for those controls.
+                const bool parentToolbar = !sameWindow &&
+                    to.wx0 <= from.wx0 + epsilon && to.wx1 >= from.wx1 - epsilon &&
+                    to.wy0 <= from.wy0 + epsilon && to.wy1 >= from.wy1 - epsilon &&
+                    ty1 <= from.RegionY0();
+                const bool adjacentPane = !vertical && !sameColumn && !parentToolbar && from.Visible() &&
+                    std::min(from.RegionY1(), to.RegionY1()) >
+                        std::max(from.RegionY0(), to.RegionY0()) &&
+                    (dx > 0 ? to.RegionX0() >= fx1 - epsilon || from.RegionX1() <= tx0 + epsilon
+                            : to.RegionX1() <= fx0 + epsilon || from.RegionX0() >= tx1 - epsilon);
+                // Only a leaf pane supplies a vertical target area. A large
+                // containing window must not give its distant actions the
+                // coordinates of the nearer child list inside it.
+                const bool enteringPane = adjacentPane || (entryForward >= -epsilon &&
+                    (!vertical || IsLeafPane(items, to, activeLayer, epsilon)) &&
+                    regionGap <= std::max(entryForward * 0.75f, rowHeight * 2.0f));
                 if (!vertical && enteringPane && ChildAtLane(items, from, to, dx, activeLayer, epsilon)) continue;
-                // Horizontal navigation can bridge staggered rows without
-                // turning a left/right press into a large vertical jump. A
-                // sparse neighboring pane is entered through its visible area.
-                if (!vertical && !enteringPane &&
+                // Allow nearby staggered controls, but reject large sideways
+                // jumps relative to the pressed direction. A sparse pane is
+                // entered through its visible area.
+                if (!enteringPane &&
                     crossGap > std::max(forward * 0.75f, rowHeight * 2.0f)) continue;
                 // A small Reset button above a wide slider shares its column.
                 // Keep the remembered lane from outweighing that nearby row;
                 // center distance still selects the intended column on ties.
-                const float lanePenalty = sameWindow && crossGap == 0.0f
+                const float lanePenalty = crossGap == 0.0f
                     ? std::min(laneDistance * 0.2f, rowHeight * 0.5f) : laneDistance * 0.2f;
-                float score = std::max(0.0f, forward) + crossGap * 0.5f + lanePenalty +
-                    (sameWindow ? 0.0f : rowHeight * 2.0f);
+                const float controlDistance = std::max(0.0f, forward) + crossGap * 0.5f + lanePenalty;
+                float score = controlDistance;
                 float insideDistance = 0.0f;
                 if (enteringPane) {
                     // Choose the pane before its contents: empty space in a
                     // list must not send the cursor to a busier neighbor.
                     const float regionLaneDistance = std::max({regionLo - _lane, _lane - regionHi, 0.0f});
-                    score = std::max(0.0f, entryForward) + regionGap * 0.5f + regionLaneDistance * 0.2f;
-                    insideDistance = vertical ? std::max(0.0f, forward) : laneDistance;
+                    // The parent window also contains the list: its window
+                    // edge is behind us on the return trip. Use the editor
+                    // control's edge, keeping the remembered row for selection.
+                    const float paneForward = adjacentPane && entryForward < -epsilon ? forward : entryForward;
+                    score = std::max(0.0f, paneForward) +
+                        regionGap * 0.5f + regionLaneDistance * 0.2f;
+                    insideDistance = vertical ? controlDistance : laneDistance;
                 }
                 const float centerDistance = std::abs((toLo + toHi) * 0.5f - _lane);
                 const auto rank = std::tuple(score, insideDistance, centerDistance, to.id);
@@ -154,6 +199,20 @@ namespace DietDrCamera
         }
 
     private:
+        static bool IsLeafPane(std::span<const NavigationItem> items,
+            const NavigationItem& pane, int activeLayer, float epsilon)
+        {
+            for (const auto& child : items) {
+                if (child.layer != activeLayer || !child.Visible() || child.SameWindow(pane)) continue;
+                if (child.wx0 >= pane.wx0 - epsilon && child.wx1 <= pane.wx1 + epsilon &&
+                    child.wy0 >= pane.wy0 - epsilon && child.wy1 <= pane.wy1 + epsilon &&
+                    child.RegionX0() >= pane.RegionX0() - epsilon &&
+                    child.RegionX1() <= pane.RegionX1() + epsilon)
+                    return false;
+            }
+            return true;
+        }
+
         bool ChildAtLane(std::span<const NavigationItem> items, const NavigationItem& from,
             const NavigationItem& parent, int dx, int activeLayer, float epsilon) const
         {

@@ -10,6 +10,7 @@
 #include "UI/MenuLayout.h"
 #include "UI/SliderValueInput.h"
 #include "UI/TabClipboard.h"
+#include "UI/SliderApplyProfiles.h"
 #include "Camera/AnimationCameraController.h"
 #include "Camera/AnimationCatalog.h"
 #include "Camera/CameraController.h"
@@ -23,6 +24,7 @@
 #include "Dialogue/DialogueLookPicker.h"
 #include "Dialogue/SpeakerClassifier.h"
 #include "Hooks/HookManager.h"
+#include "Camera/BleedoutCameraOverride.h"
 #include "Input/DialogueInputSink.h"
 #include "LockOn/EnemyDetector.h"
 #include "LockOn/TDMIntegration.h"
@@ -94,6 +96,8 @@ namespace DietDrCamera
     // the per-frame hook below.
     static bool sQTHoldsDMClaim = false;
     static std::atomic<bool> sQTSectionActive{false};
+    static int sCombatFovPanelFrame = -1;
+    static std::atomic<bool> sCombatFovPreview{false};
 
     // The Specific Weapons body is reused by Categories, Target Lock,
     // Camera Noise and First Person â€” bindings storage is shared
@@ -366,6 +370,7 @@ namespace DietDrCamera
         static bool PadHandleItem(int a_idx, bool a_completeWindow = true);
         static void PadPressFlash(ImGuiMCP::ImU32 a_rgb = kPadFlashAmber);
         static void PadMarkItemTab(int a_idx);
+        static void PadSetTabEntry(int a_tabIdx);
 
         // Bumper-driven tab switching. One static instance per tab bar.
         // Usage:  bar.Begin(inPopup);  if (bar.Item(label)) { ...;
@@ -381,11 +386,13 @@ namespace DietDrCamera
             int request  = -1;  // A-commit on a hovered tab (applies next frame)
             int cursor   = 0;   // auto-index while submitting
             int count    = 0;   // tabs submitted last frame
+            int currentPadItem = -1;
 
             void Begin(bool a_inPopup = false)
             {
                 using namespace ImGuiMCP;
                 cursor  = 0;
+                currentPadItem = -1;
                 pending = -1;
                 if (request >= 0) {   // hovered-tab A press from last frame
                     pending = request;
@@ -417,6 +424,7 @@ namespace DietDrCamera
                 // back up to the strip (scrolling the view to the top
                 // with it) and A selects the hovered tab.
                 const int padIdx = PadRegisterItem();
+                currentPadItem = padIdx;
                 PadMarkItemTab(padIdx);
                 if (PadHandleItem(padIdx)) {
                     request = idx;
@@ -425,6 +433,8 @@ namespace DietDrCamera
                 if (open) selected = idx;
                 return open;
             }
+            // Call immediately after the tab's primary control is registered.
+            void EntryItem() { PadSetTabEntry(currentPadItem); }
             void End() { count = cursor; }
         };
 
@@ -631,11 +641,16 @@ namespace DietDrCamera
         {
             if (a_idx >= 0 && a_idx < sPadItemN) sPadItems[a_idx].tab = true;
         }
-        // Mark the just-submitted pad item as a "tab" â€” this only enables the
-        // vertical-move FALLBACK (nearest item below/above when nothing sits in
-        // its strict column; see moveCursor). Used for a left-aligned button whose
-        // column doesn't overlap the wider control below it (a slider track starts
-        // past the label column), so d-pad DOWN still reaches that control.
+        static void PadSetTabEntry(int a_tabIdx)
+        {
+            if (a_tabIdx < 0 || a_tabIdx + 1 >= sPadItemN) return;
+            const auto& tab = sPadItems[a_tabIdx];
+            auto& entry = sPadItems[sPadItemN - 1];
+            if (tab.tab && entry.layer == tab.layer && entry.SameWindow(tab)) entry.entryTab = tab.id;
+        }
+
+        // Tab-like controls keep spatial navigation unless an explicit entry
+        // control is linked through PadTabBar::EntryItem.
         static void PadMarkLastItemTab()
         {
             if (sPadItemN > 0) sPadItems[sPadItemN - 1].tab = true;
@@ -1096,6 +1111,10 @@ namespace DietDrCamera
                 ImGui::GetIO()->ConfigFlags |= quickTuneNavFlags;
                 quickTuneNavFlags = 0;
             } else if (hook->Type == ImGuiContextHookType_EndFramePre) {
+                // End-of-frame publication also clears the preview when another
+                // mod's page renders or this detail pane is no longer visible.
+                sCombatFovPreview.store(sCombatFovPanelFrame == ImGui::GetFrameCount(),
+                    std::memory_order_relaxed);
                 PadFinishFrame();
                 PadRenderHints();
                 sPadHintLayout.EndFrame();
@@ -1632,17 +1651,6 @@ namespace DietDrCamera
         // destination doesn't support are skipped on paste. The three override
         // BUTTONS (Transitions / Location / Weapon Overrides) are hover
         // targets of their own kinds so just that block can be moved.
-        enum class EntryClipKind { None, Camera, Noise, FirstPerson,
-                                   Transitions, LocationOv, WeaponOv, ShoutSet,
-                                   ShoutNoiseSet,   // a state's whole shout NOISE block (key-listed)
-                                   DialogueLook,    // one dialogue look (bucket+index)
-                                   FpWeaponOv,      // FP weapon-type override set (button)
-                                   FpLocationOv,    // FP per-location slots for one state key (button)
-                                   NoiseWeaponOv,   // noise weapon-type override set (button)
-                                   EnemyOv,         // one entry's whole enemy-override column (button)
-                                   FxBeat,          // one Transformations beat row (Bats / Transformation / Revert)
-                                   CineSource,      // one Cinematic Effects creature shake (a Dragon / Centurion source)
-                                   EnvHalf, Scalar, Tab };  // one environment, or a complete tab with overrides
         enum class TabCollection { Entries, Weapons, Animations };
         struct TabLocation
         {
@@ -1812,6 +1820,7 @@ namespace DietDrCamera
             std::vector<std::string> tabKeys;
             int tabEnvironment = 0;
             bool tabMapState = false;
+            bool sliderOverride = false, sliderShout = false, sliderDragon = false;
             SettingsManager::WeaponBinding* binding = nullptr;
             int bindingSlot = -1;  // -1 addresses every state when pasting
             SpecWeaponsSection bindingSection = SpecWeaponsSection::Categories;
@@ -2511,6 +2520,8 @@ namespace DietDrCamera
             target.binding = &b;
             target.bindingSlot = slot;
             target.bindingSection = section;
+            target.sliderOverride = b.category == SettingsManager::BindingCategory::Melee && slot >= 10;
+            target.sliderShout = b.category == SettingsManager::BindingCategory::Shout;
             const auto si = static_cast<std::size_t>(std::max(slot, 0));
             const int env = s.categoriesEditTab;
             const bool fp = section == SpecWeaponsSection::FirstPerson;
@@ -2876,6 +2887,41 @@ namespace DietDrCamera
             // the live springs and zoom baseline: resetting them for an inactive
             // paste snaps to the pre-enemy profile and replays the enemy blend.
             auto& s = SettingsManager::GetSingleton();
+            if (sEntryHover.kind == EntryClipKind::Tab && sEntryClip.kind != EntryClipKind::Tab) {
+                const auto target = sEntryHover;
+                const auto source = sEntryClip;
+                const bool quiet = std::exchange(sEntryClipQuiet, true);
+                const int environment = s.categoriesEditTab;
+                const auto applied = BroadcastEntryToTab(source, target.tabEntries,
+                    [](const auto& copied, const auto& child) {
+                        return CanBroadcastEntryToTab(copied.kind, child.kind);
+                    },
+                    [&](const auto& copied, auto child) {
+                        s.categoriesEditTab = child.tabEnvironment;
+                        // Unauthored map entries point at a shared fallback while
+                        // rendering. Materialize the destination before writing.
+                        if (child.tabMapState) {
+                            if (child.kind == EntryClipKind::Noise)
+                                child.ptr = &s.StateNoiseFor(child.tabEnvironment)[child.noiseKey];
+                            else
+                                child.ptr = &s.EnsureStateFp(child.noiseKey);
+                        }
+                        child.owner = target.owner;
+                        sEntryHover = std::move(child);
+                        sEntryClip = copied;
+                        // Reuse row paste so transitions, overrides and enable
+                        // flags behave exactly as they do on an individual row.
+                        return EntryClipPaste(true);
+                    });
+                s.categoriesEditTab = environment;
+                sEntryHover = target;
+                sEntryClip = source;
+                sEntryClipQuiet = quiet;
+                EntryClipAnnounce(applied ? "Pasted " + source.label + " onto " + target.label +
+                    " (" + std::to_string(applied) + " entries)" :
+                    "Paste: this tab has no compatible entries.");
+                return applied != 0;
+            }
             if (sEntryHover.kind == EntryClipKind::Tab || sEntryClip.kind == EntryClipKind::Tab) {
                 if (sEntryHover.kind != EntryClipKind::Tab || sEntryClip.kind != EntryClipKind::Tab) {
                     EntryClipAnnounce("Paste: copy a tab and hover the destination tab.");
@@ -3455,7 +3501,8 @@ namespace DietDrCamera
         static void AddTabCamera(SettingsManager& s, EntryHoverTarget& tab, const std::string& key,
             CameraProfile* profile, bool targetLock, MeleeWeaponOverrides* melee = nullptr,
             bool* enabled = nullptr, SettingsManager::MagicHandOverrideSet* hands = nullptr, int direction = -1,
-            std::optional<SettingsManager::TLSlot> inheritedSlot = std::nullopt)
+            std::optional<SettingsManager::TLSlot> inheritedSlot = std::nullopt,
+            bool sliderOverride = false, bool sliderShout = false, bool sliderDragon = false)
         {
             if (!profile) return;
             for (int environment = 0; environment < SettingsManager::kEnvCount; ++environment) {
@@ -3466,6 +3513,9 @@ namespace DietDrCamera
                 child.meleeOv = melee;
                 child.enableFlag = enabled;
                 child.handSet = hands;
+                child.sliderOverride = sliderOverride;
+                child.sliderShout = sliderShout;
+                child.sliderDragon = sliderDragon;
                 if (targetLock) {
                     const auto slot = inheritedSlot ? inheritedSlot : s.SlotFromTLProfile(profile);
                     child.enemyOv.slot = slot;
@@ -3503,6 +3553,9 @@ namespace DietDrCamera
                             EntryHoverTarget child;
                             child.kind = EntryClipKind::Noise;
                             child.ptr = &binding.HandNoiseFor(environment)[hand][3];
+                            child.binding = &binding;
+                            child.bindingSlot = 3;
+                            child.sliderOverride = true;
                             child.enableFlag = &binding.handNoiseEnabled[hand][3];
                             AddTabTarget(tab, BindingTabKey(binding) + "/casting/hand/" + std::to_string(hand),
                                 std::move(child), environment);
@@ -3558,7 +3611,7 @@ namespace DietDrCamera
                         hands = &(targetLock ? s.tlMagicHandOverrides : s.magicHandOverrides)
                             [entry.magicSchool][entry.magicCast][entry.magicSneak ? 1 : 0];
                     AddTabCamera(s, tab, entry.label, entry.profile, targetLock,
-                        entry.meleeOverrides, entry.enableFlag, hands);
+                        entry.meleeOverrides, entry.enableFlag, hands, -1, std::nullopt, false, false, entry.isDragon);
                     if (entry.paDirHost) {
                         for (std::size_t direction = 0; direction < SettingsManager::kPowerAttackDirectionCount; ++direction)
                             AddTabCamera(s, tab, std::string(entry.label) + "/direction/" + std::to_string(direction),
@@ -3566,7 +3619,7 @@ namespace DietDrCamera
                                 targetLock,
                                 &(targetLock ? s.tlWeaponsMeleePowerAttackDirOverrides : s.weaponsMeleePowerAttackDirOverrides)[direction],
                                 &(targetLock ? s.tlWeaponsMeleePowerAttackDirEnabled : s.weaponsMeleePowerAttackDirEnabled)[direction],
-                                nullptr, static_cast<int>(direction));
+                                nullptr, static_cast<int>(direction), std::nullopt, true);
                     }
                     if (entry.shoutsStateIndex < 0) continue;
                     const auto state = static_cast<std::size_t>(entry.shoutsStateIndex);
@@ -3576,11 +3629,12 @@ namespace DietDrCamera
                         (entry.shoutsIsSneak ? s.shoutOverrideByStateSneak : s.shoutOverrideByState);
                     auto& enabled = targetLock ? (entry.shoutsIsSneak ? s.tlShoutOverrideByStateEnabledSneak : s.tlShoutOverrideByStateEnabled) :
                         (entry.shoutsIsSneak ? s.shoutOverrideByStateEnabledSneak : s.shoutOverrideByStateEnabled);
-                    AddTabCamera(s, tab, std::string(entry.label) + "/base", &bases[state], targetLock);
+                    AddTabCamera(s, tab, std::string(entry.label) + "/base", &bases[state], targetLock,
+                        nullptr, nullptr, nullptr, -1, std::nullopt, false, true);
                     const auto slot = targetLock ? s.SlotFromTLProfile(&bases[state]) : std::nullopt;
                     for (std::size_t shout = 0; shout < kShoutCount; ++shout)
                         AddTabCamera(s, tab, std::string(entry.label) + "/" + kShouts[shout].tomlKey,
-                            &profiles[state][shout], targetLock, nullptr, &enabled[state][shout], nullptr, -1, slot);
+                            &profiles[state][shout], targetLock, nullptr, &enabled[state][shout], nullptr, -1, slot, true, true);
                 }
             };
             collect(definition.entries);
@@ -3608,15 +3662,20 @@ namespace DietDrCamera
                     if (PadBeginPopupModal("##tab_clipboard", nullptr,
                             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize)) {
                         ImGui::Text("%s", label);
+                        const bool wholeTab = sEntryClip.kind == EntryClipKind::Tab;
+                        const bool canPaste = wholeTab || std::ranges::any_of(target.tabEntries,
+                            [&](const auto& child) { return CanBroadcastEntryToTab(sEntryClip.kind, child.kind); });
                         ImGui::TextUnformatted("Includes both environments and nested overrides.");
+                        if (!wholeTab && canPaste)
+                            ImGui::TextUnformatted("The copied entry applies to every compatible entry in this tab.");
                         if (PadButton("Copy Tab")) {
                             sEntryHover = target;
                             EntryClipCopy();
                             ImGui::CloseCurrentPopup();
                         }
                         ImGui::SameLine();
-                        PadBeginDisabled(sEntryClip.kind != EntryClipKind::Tab);
-                        if (PadButton("Paste Tab")) {
+                        PadBeginDisabled(!canPaste);
+                        if (PadButton(wholeTab ? "Paste Tab" : "Paste Entry to All")) {
                             sEntryHover = target;
                             EntryClipPaste();
                             ImGui::CloseCurrentPopup();
@@ -4848,21 +4907,176 @@ namespace DietDrCamera
             }
         }
 
-        // Defined below; consumes the grid's optional Reset beside the label.
-        static bool ConsumeInlineReset(float a_restoreScale);
+        static void CollectSliderApplyTargets(SettingsManager& s, std::string_view section, SliderApply::Collector& out);
+        static bool sInlineResetRow = false;
+        struct SliderApplyPopupState
+        {
+            std::optional<SliderApply::Request> request;
+            std::string section, caption, sharedNote;
+            bool shared = false;
+        };
+        static SliderApplyPopupState sSliderApply;
 
-        static void AlignInlineResetToLabel()
+        // Override and bound-entry editors keep Reset, but do not originate
+        // bulk Apply actions. Restore the parent state after nested editors.
+        static bool sSliderApplySuppressed = false;
+        struct SliderApplySuppression
+        {
+            const bool previous;
+            SliderApplySuppression() : previous(sSliderApplySuppressed) { sSliderApplySuppressed = true; }
+            ~SliderApplySuppression() { sSliderApplySuppressed = previous; }
+        };
+
+        static bool SliderApplyAvailable()
+        {
+            if (sSliderApplySuppressed) return false;
+            const std::string_view section = sClipSection ? sClipSection : "";
+            return section == "Third Person" || section == "Target Lock" ||
+                section == "Camera Noise" || section == "First Person";
+        }
+
+        static void OpenSliderApply(const char* label, float* value, const char* format)
+        {
+            auto& s = SettingsManager::GetSingleton();
+            SliderApply::Collector targets(value);
+            CollectSliderApplyTargets(s, sClipSection, targets);
+            sSliderApply = {};
+            sSliderApply.request = targets.Identified();
+            if (sSliderApply.request)
+                sSliderApply.request->environment = s.categoriesEditTab == SettingsManager::kEnvIndoor ?
+                    SliderApply::Environment::Indoor : SliderApply::Environment::Outdoor;
+            sSliderApply.section = sClipSection;
+            // These two UI values are remapped local floats. Their settings
+            // already affect all Target Lock entries; never retain the locals.
+            sSliderApply.shared = sSliderApply.section == "Target Lock" &&
+                (std::string_view(label) == "Target Acquire Speed" || std::string_view(label) == "Target Switch Speed" ||
+                 std::string_view(label) == "Tracking Smoothing" ||
+                 (sSliderApply.request && sSliderApply.request->field == "general.looseness"));
+            char number[64];
+            std::snprintf(number, sizeof(number), format, *value);
+            sSliderApply.caption = std::string(label) + " = " + number;
+            sSliderApply.sharedNote = std::string_view(label) == "Tracking Smoothing" ?
+                "This setting already applies to this enemy throughout Target Lock." :
+                "This setting already applies throughout Target Lock.";
+            ImGuiMCP::ImGui::OpenPopup("##slider_apply_scope");
+        }
+
+        // Both buttons stay together. Reserve the whole pair before deciding
+        // whether they fit beside the label; the slider retains its full width.
+        static void AlignSliderActions(bool apply)
         {
             using namespace ImGuiMCP;
-            ImVec2 labelMax{}, cursor{}, available{}, resetText{};
+            ImVec2 labelMax{}, cursor{}, available{}, text{};
             ImGui::GetItemRectMax(&labelMax);
             ImGui::GetCursorScreenPos(&cursor);
             ImGui::GetContentRegionAvail(&available);
             ImGui::SetWindowFontScale(sSliderResetFontScale * (sCompactScale ? sCompactControlScale : 1.0f));
-            ImGui::CalcTextSize(&resetText, "Reset", nullptr, false, -1.0f);
-            const float resetWidth = resetText.x + ImGui::GetStyle()->FramePadding.x * 2.0f;
-            if (labelMax.x + Sx(16.0f) + resetWidth <= cursor.x + available.x)
+            ImGui::CalcTextSize(&text, "Reset", nullptr, false, -1.0f);
+            float width = text.x + ImGui::GetStyle()->FramePadding.x * 2.0f;
+            if (apply) {
+                ImGui::CalcTextSize(&text, "Apply", nullptr, false, -1.0f);
+                width += text.x + ImGui::GetStyle()->FramePadding.x * 2.0f + Sx(8.0f);
+            }
+            if (labelMax.x + Sx(16.0f) + width <= cursor.x + available.x)
                 ImGui::SameLine(0, Sx(16.0f));
+        }
+
+        static void SliderActionButtons(const char* label, float* value, float defaultValue, const char* format)
+        {
+            using namespace ImGuiMCP;
+            if (SliderApplyAvailable()) {
+                if (PadSmallButton("Apply##slider_apply")) OpenSliderApply(label, value, format);
+                ImGui::SameLine(0, Sx(8.0f));
+            }
+            if (PadSmallButton("Reset##inline_val_reset")) *value = defaultValue;
+        }
+
+        static void RenderSliderApplyPopup()
+        {
+            using namespace ImGuiMCP;
+            using SliderApply::Scope;
+            if (!SliderApplyAvailable()) return;
+            auto* io = ImGui::GetIO();
+            // Reset All uses a 1.4x modal on a 1.4x section. Match that
+            // effective size even when this slider lives in a compact editor.
+            constexpr float confirmationScale = 1.4f * 1.4f;
+            const auto* host = ImGui::GetCurrentWindow();
+            const float hostScale = host->FontWindowScale * (host->ParentWindow ? host->ParentWindow->FontWindowScale : 1.0f);
+            const float measureScale = confirmationScale / hostScale;
+            const std::string title = "Apply " + sSliderApply.caption;
+            const float gap = Sx(12.0f);
+            const ImVec2 padding(Sx(24.0f), Sx(20.0f));
+            float widestLabel = 0.0f;
+            for (const char* label : { "Entire Tab + Overrides", "All Outdoor + Overrides", "All Indoor + Overrides" }) {
+                ImVec2 size;
+                ImGui::CalcTextSize(&size, label, nullptr, false, -1.0f);
+                widestLabel = std::max(widestLabel, size.x * measureScale);
+            }
+            ImVec2 titleSize;
+            ImGui::CalcTextSize(&titleSize, title.c_str(), nullptr, false, -1.0f);
+            const float buttonMinimum = widestLabel + ImGui::GetStyle()->FramePadding.x * 2.0f + Sx(24.0f);
+            float width = std::max({ Sx(1000.0f), buttonMinimum * 2.0f + gap + padding.x * 2.0f,
+                titleSize.x * measureScale + padding.x * 2.0f });
+            if (io && io->DisplaySize.x > 100.0f) {
+                ImGui::SetNextWindowPos(ImVec2(io->DisplaySize.x * 0.5f, io->DisplaySize.y * 0.5f),
+                    ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                width = std::min(width, io->DisplaySize.x - Sx(48.0f));
+            }
+            ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, 10000.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, Sx(10.0f)));
+            if (PadBeginPopupModal("##slider_apply_scope", nullptr,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const auto* parent = ImGui::GetCurrentWindow()->ParentWindow;
+                const float parentScale = parent ? parent->FontWindowScale : 1.0f;
+                ImGui::SetWindowFontScale(confirmationScale / parentScale);
+                PopupCenteredText(title.c_str());
+                ImGui::Dummy(ImVec2(0, Sx(12.0f)));
+                ImVec2 availableSpace;
+                ImGui::GetContentRegionAvail(&availableSpace);
+                const float buttonWidth = (availableSpace.x - gap) * 0.5f;
+                const auto apply = [&](const char* label, Scope scope) {
+                    if (PadButton(label, ImVec2(buttonWidth, 0))) {
+                        if (sSliderApply.shared) EntryClipAnnounce(sSliderApply.sharedNote);
+                        else {
+                            SliderApply::Collector targets(sSliderApply.request->field);
+                            CollectSliderApplyTargets(SettingsManager::GetSingleton(), sSliderApply.section, targets);
+                            const auto count = targets.Apply(*sSliderApply.request, scope);
+                            if (sSliderApply.section == "Camera Noise" || sSliderApply.section == "First Person")
+                                CameraNoiseController::NotifyLiveNoiseEdit();
+                            EntryClipAnnounce("Applied " + sSliderApply.caption + " to " + std::to_string(count) + " matching values.");
+                        }
+                        ImGui::CloseCurrentPopup();
+                    }
+                };
+                const bool available = sSliderApply.shared || sSliderApply.request.has_value();
+                if (!available) PadBeginDisabled();
+                apply("Entire Tab", Scope::Tab);
+                ImGui::SameLine(0, gap);
+                apply("Entire Tab + Overrides", Scope::TabWithOverrides);
+                if (sSliderApply.section != "First Person" && !sSliderApply.shared && sSliderApply.request) {
+                    const bool indoor = sSliderApply.request->environment == SliderApply::Environment::Indoor;
+                    apply(indoor ? "All Indoor" : "All Outdoor", Scope::CurrentEnvironment);
+                    ImGui::SameLine(0, gap);
+                    apply(indoor ? "All Indoor + Overrides" : "All Outdoor + Overrides", Scope::CurrentEnvironmentWithOverrides);
+                }
+                apply("All Tabs", Scope::AllTabs);
+                ImGui::SameLine(0, gap);
+                apply("All Tabs + Overrides", Scope::AllTabsWithOverrides);
+                if (!available) PadEndDisabled();
+                ImGui::Dummy(ImVec2(0, Sx(8.0f)));
+                ImGui::Separator();
+                ImGui::Dummy(ImVec2(0, Sx(8.0f)));
+                ImVec2 cancelText;
+                ImGui::CalcTextSize(&cancelText, "Cancel", nullptr, false, -1.0f);
+                const float cancelWidth = std::max(Sx(220.0f),
+                    cancelText.x + ImGui::GetStyle()->FramePadding.x * 2.0f + Sx(32.0f));
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availableSpace.x - cancelWidth) * 0.5f);
+                if (PadButton("Cancel##slider_apply_cancel", ImVec2(cancelWidth, 0))) ImGui::CloseCurrentPopup();
+                PadEndPopup();
+            }
+            ImGui::PopStyleVar(2);
         }
 
         void RenderSlider(const char* label, float* value, float min, float max, float step, float vanillaDefault, const char* description = nullptr, const char* resetLabel = "Reset To Default", bool /*unused*/ = false, const char* valueFormat = "%.2f", const char* extraBtnLabel = nullptr, bool* extraBtnClicked = nullptr)
@@ -4883,12 +5097,10 @@ namespace DietDrCamera
             ImGui::SetWindowFontScale(ScaleLabel());
             DrawEditableSliderLabel(label, value, min, max, valueFormat);
             ImGui::SetWindowFontScale(ScaleBody());
-            if (ConsumeInlineReset(ScaleBody())) *value = vanillaDefault;
-            // Keep Reset beside the value when it fits, otherwise on its own row.
-            const bool showReset = resetLabel && resetLabel[0] != '\0';
+            const bool showReset = std::exchange(sInlineResetRow, false) || (resetLabel && resetLabel[0] != '\0');
             if (showReset) {
-                AlignInlineResetToLabel();
-                if (PadSmallButton("Reset##inline_val_reset")) *value = vanillaDefault;
+                AlignSliderActions(SliderApplyAvailable());
+                SliderActionButtons(label, value, vanillaDefault, valueFormat);
                 ImGui::SetWindowFontScale(ScaleBody());
             }
 
@@ -4911,6 +5123,7 @@ namespace DietDrCamera
             // end-to-end (left = slow drag, right = free 1:1, click = jump) and
             // renders the thumb straight from *value, so it never rebounds.
             DrawSliderTrack("##slider", value, min, max, availWidth, ImGui::GetFrameHeight(), false);
+            RenderSliderApplyPopup();
 
             // The per-slider Reset moved INLINE onto the label row (above);
             // only the optional extra button still renders below the track.
@@ -4996,24 +5209,6 @@ namespace DietDrCamera
         // (Transition-personality toggles â€” Smooth / Heavy / Glide â€” lived
         // here until 2026-08-17. The whole selector was cut; transitions are
         // the critically-damped chase Smooth always was. See Core/Spring.h.)
-
-        // The NEXT slider renders a small Reset button at the END of its label
-        // row (user layout 2026-08-14; replaces the below-the-track Reset
-        // those sliders used to carry).
-        static bool sInlineResetRow = false;
-
-        // Consumed by the slider label renderers on the label row; resets the
-        // slider's own value to its default.
-        static bool ConsumeInlineReset(float a_restoreScale)
-        {
-            using namespace ImGuiMCP;
-            if (!sInlineResetRow) return false;
-            sInlineResetRow = false;
-            AlignInlineResetToLabel();
-            const bool clicked = PadSmallButton("Reset##inline_reset");
-            ImGui::SetWindowFontScale(a_restoreScale);
-            return clicked;
-        }
 
         // Renders a list of sliders exactly like the Categories profile editor
         // (RenderProfileBlock): a SINGLE full-width column at the default (large)
@@ -5169,6 +5364,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_trans_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Transition Override");
                 ImGui::Dummy(ImVec2(0, Sx(14.0f)));
@@ -6005,6 +6201,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_loc_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Location Override");
                 if (entryName && entryName[0]) {
@@ -6319,6 +6516,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_melee_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 const float meleeExactW = CachedTabStripPopupWidth(sWtoTabStrip);
                 // The full-label ESTIMATE (all 8 vanilla tabs + every bound
@@ -6567,6 +6765,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_magic_hand_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Per Hand Overrides");
                 if (entryName && entryName[0]) {
@@ -6896,7 +7095,7 @@ namespace DietDrCamera
             }
         }
 
-        SKSEMenuFramework::SetSection("Diet Dr Camera");
+        SKSEMenuFramework::SetSection("OmniCam");
         SKSEMenuFramework::AddSectionItem("Presets",          [] { RenderControllerSection(RenderPresets); });
         // Base Settings â€” Camera Collision and Transitions share a single
         // section with a tab strip. Functionally distinct controls but
@@ -6955,6 +7154,11 @@ namespace DietDrCamera
     bool MenuUI::IsMainMenuOpen()
     {
         return sPadPanelOpen.load(std::memory_order_relaxed);
+    }
+
+    bool MenuUI::IsCombatFOVPreviewActive()
+    {
+        return IsMainMenuOpen() && sCombatFovPreview.load(std::memory_order_relaxed);
     }
 
     bool MenuUI::HasQuickTuneDMClaim()
@@ -8880,6 +9084,7 @@ namespace DietDrCamera
                 : (ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             if (PadBeginPopupModal("##entry_enemy_popup", nullptr, enemyPopupFlags)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 // Selected custom bind â€” hoisted so Reset All (below) can target it.
                 static int sSelectedCustomEnemy = 0;
@@ -8952,14 +9157,21 @@ namespace DietDrCamera
                 // drawn on the bar, NO per-slider description or reset button (the
                 // popup's Reset All covers reset). Keeps a full override body short
                 // enough that a tab never scrolls. Left = slow drag, right = free.
-                auto compactRow = [&](const char* label, float* value, float lo, float hi) {
+                auto compactRow = [&](const char* label, float* value, float lo, float hi, float defaultValue) {
                     ImGui::PushID(label);
                     ImGui::SetWindowFontScale(1.1f);
+                    const float before = *value;
                     const float w = PlaceSliderAfterLabel(label, kRowLabelW);
-                    const bool ch =
-                        DrawSliderTrack("##er_track", value, lo, hi, w, ImGui::GetFrameHeight(), true);
+                    ImVec2 actions{};
+                    ImGui::CalcTextSize(&actions, SliderApplyAvailable() ? "ApplyReset" : "Reset", nullptr, false, -1.0f);
+                    const float actionWidth = actions.x + ImGui::GetStyle()->FramePadding.x *
+                        (SliderApplyAvailable() ? 4.0f : 2.0f) + Sx(SliderApplyAvailable() ? 16.0f : 8.0f);
+                    DrawSliderTrack("##er_track", value, lo, hi, (std::max)(Sx(60.0f), w - actionWidth), ImGui::GetFrameHeight(), true);
+                    ImGui::SameLine(0, Sx(8.0f));
+                    SliderActionButtons(label, value, defaultValue, "%.2f");
+                    RenderSliderApplyPopup();
                     ImGui::PopID();
-                    return ch;
+                    return *value != before;
                 };
                 // Shared per-enemy override body (Aim Bias + camera block), reused by
                 // the category tabs and the custom bind editor. within/all drive "Apply".
@@ -9010,12 +9222,12 @@ namespace DietDrCamera
                     RenderTransitionOverride(&o->profile, 0.0f, 1.2f, /*aimBias=*/true);
                     ImGui::Dummy(ImVec2(0, Sx(4.0f)));
                     bool camTouched = false;
-                    camTouched |= compactRow("Side Offset",  &o->profile.sideOffset,  Defaults::SideOffset.min,  Defaults::SideOffset.max);
-                    camTouched |= compactRow("Height",       &o->profile.height,      Defaults::Height.min,      Defaults::Height.max);
-                    camTouched |= compactRow("Zoom",         &o->profile.zoom,        Defaults::Zoom.min,        Defaults::Zoom.max);
-                    camTouched |= compactRow("FOV",          &o->profile.fov,         Defaults::FOV.min,         Defaults::FOV.max);
-                    camTouched |= compactRow("Rotation",     &o->profile.rotation,    Defaults::Rotation.min,    Defaults::Rotation.max);
-                    camTouched |= compactRow("Pitch Offset", &o->profile.pitchOffset, Defaults::PitchOffset.min, Defaults::PitchOffset.max);
+                    camTouched |= compactRow("Side Offset",  &o->profile.sideOffset,  Defaults::SideOffset.min,  Defaults::SideOffset.max, CameraProfile{}.sideOffset);
+                    camTouched |= compactRow("Height",       &o->profile.height,      Defaults::Height.min,      Defaults::Height.max, CameraProfile{}.height);
+                    camTouched |= compactRow("Zoom",         &o->profile.zoom,        Defaults::Zoom.min,        Defaults::Zoom.max, CameraProfile{}.zoom);
+                    camTouched |= compactRow("FOV",          &o->profile.fov,         Defaults::FOV.min,         Defaults::FOV.max, CameraProfile{}.fov);
+                    camTouched |= compactRow("Rotation",     &o->profile.rotation,    Defaults::Rotation.min,    Defaults::Rotation.max, CameraProfile{}.rotation);
+                    camTouched |= compactRow("Pitch Offset", &o->profile.pitchOffset, Defaults::PitchOffset.min, Defaults::PitchOffset.max, CameraProfile{}.pitchOffset);
                     // First drag arms the whole set â€” the other five fields are
                     // already mirroring the live framing, so arming here keeps
                     // exactly what is on screen and changes only what moved.
@@ -9399,7 +9611,7 @@ namespace DietDrCamera
                             // white text (user request 2026-08-15).
                             ImGui::SetWindowFontScale(0.95f);
                             ImGui::TextWrapped("Tracking smoothing dampens the camera whipping that some enemies tend to cause, such as horkers.");
-                            compactRow("Tracking Smoothing", &c.trackingSmoothing, 0.0f, 3.0f);
+                            compactRow("Tracking Smoothing", &c.trackingSmoothing, 0.0f, 3.0f, 0.0f);
                         }
                     }
                     PadNavEndChild();
@@ -9576,6 +9788,7 @@ namespace DietDrCamera
             context.copy = keyName(settings.entryCopyKey);
             context.paste = keyName(settings.entryPasteKey);
             context.clipboardHasContents = sEntryClip.kind != EntryClipKind::None;
+            context.clipboardIsTab = sEntryClip.kind == EntryClipKind::Tab;
             context.quickTune = keyName(settings.quickTuneHotkey);
             if (sMenuNavAvailable && sPadHasCursor && !sPadCapture.IsSidebar() &&
                 (!sKeyboardHints || sKeyboardCursor))
@@ -9607,19 +9820,17 @@ namespace DietDrCamera
 
             ImGui::SetWindowFontScale(1.6f);
             DrawEditableSliderLabel(label, value, min, max, valueFormat);
-            if (ConsumeInlineReset(1.6f)) *value = vanillaDefault;
-            // Reset sits INLINE next to the value (user redesign 2026-08-15;
-            // replaces the below-the-track button).
-            if (a_showReset) {
-                ImGui::SameLine(0, Sx(16.0f));
-                ImGui::SetWindowFontScale(1.1f);
-                if (PadSmallButton("Reset##cbtn")) *value = vanillaDefault;
+            const bool showReset = std::exchange(sInlineResetRow, false) || a_showReset;
+            if (showReset) {
+                AlignSliderActions(SliderApplyAvailable());
+                SliderActionButtons(label, value, vanillaDefault, valueFormat);
                 ImGui::SetWindowFontScale(1.6f);
             }
 
             ImGui::Dummy(ImVec2(0, Sx(2.0f)));
             // Custom track (left = slow, right = free, no rebound). See RenderSlider.
             DrawSliderTrack("##cslider", value, min, max, availWidth, ImGui::GetFrameHeight(), false);
+            RenderSliderApplyPopup();
 
             ImGui::Dummy(ImVec2(0, Sx(12.0f)));
             ImGui::SetWindowFontScale(2.0f);
@@ -9817,9 +10028,11 @@ namespace DietDrCamera
                     ImGui::SameLine(0, Sx(24.0f));
                     PadCheckbox("Skip lines under 5 seconds", &s.dialogueSkipShortNpcLines);
                 }
-                // (The look-at-player toggle and its feature were removed at
-                // user request 2026-08-15.)
             }
+            ImGui::Dummy(ImVec2(0, Sx(8.0f)));
+            PadCheckbox("Camera Switching (Requires DBVO 2)", &s.dialogueDBVOCameraSwitching);
+            if (ImGui::IsItemHovered(0))
+                ImGui::SetTooltip("Frame the player while choosing and speaking responses in third person. Requires DBVO 2.");
             ImGui::Dummy(ImVec2(0, Sx(12.0f)));
             ImGui::Separator();
             ImGui::Dummy(ImVec2(0, Sx(12.0f)));
@@ -10809,23 +11022,32 @@ namespace DietDrCamera
                 ImGui::SetWindowFontScale(1.4f);
                 ImGui::Dummy(ImVec2(0, Sx(10.0f)));
                 ImGui::SetWindowFontScale(2.1f);   // Menus-tab checkbox scale
-                PadCheckbox("Free Look", &s.deathCameraFreeLook);
+                PadCheckbox("Disable Death Camera", &s.disableDeathCamera);
                 ImGui::SetWindowFontScale(1.4f);
+                if (!BleedoutCameraOverride::IsAvailable()) {
+                    ImGui::TextWrapped("Camera blocking is unavailable because another camera hook changed the switch. Check OmniCam's log.");
+                }
                 ImGui::Dummy(ImVec2(0, Sx(6.0f)));
-                RenderSlider("FOV",
-                             &s.deathCameraFov,
-                             Defaults::FirstPersonFOV.min, Defaults::FirstPersonFOV.max, Defaults::FirstPersonFOV.step,
-                             90.0f);
-                ImGui::Dummy(ImVec2(0, Sx(6.0f)));
-                ImGui::Separator();
-                ImGui::Dummy(ImVec2(0, Sx(6.0f)));
-                ImGui::SetWindowFontScale(2.1f);   // Menus-tab checkbox scale
+                if (!s.disableDeathCamera) {
+                    ImGui::SetWindowFontScale(2.1f);
+                    PadCheckbox("Free Look", &s.deathCameraFreeLook);
+                    ImGui::SetWindowFontScale(1.4f);
+                    ImGui::Dummy(ImVec2(0, Sx(6.0f)));
+                    RenderSlider("FOV",
+                                 &s.deathCameraFov,
+                                 Defaults::FirstPersonFOV.min, Defaults::FirstPersonFOV.max, Defaults::FirstPersonFOV.step,
+                                 90.0f);
+                    ImGui::Dummy(ImVec2(0, Sx(6.0f)));
+                    ImGui::Separator();
+                    ImGui::Dummy(ImVec2(0, Sx(6.0f)));
+                }
+                ImGui::SetWindowFontScale(2.1f);
                 PadCheckbox("Infinite Duration", &s.deathCameraInfiniteDuration);
                 ImGui::SetWindowFontScale(1.4f);
                 if (s.deathCameraInfiniteDuration) {
                     ImGui::Dummy(ImVec2(0, Sx(4.0f)));
                     ImGui::SetWindowFontScale(1.1f);
-                    ImGui::TextWrapped("Death camera lasts until the skip hotkey is pressed.");
+                    ImGui::TextWrapped("Reload waits until the skip hotkey is pressed.");
                     ImGui::SetWindowFontScale(1.4f);
                 } else {
                     ImGui::Dummy(ImVec2(0, Sx(6.0f)));
@@ -10936,13 +11158,22 @@ namespace DietDrCamera
                 ImGui::SetWindowFontScale(1.4f);
                 ImGui::Dummy(ImVec2(0, Sx(10.0f)));
                 ImGui::SetWindowFontScale(2.1f);   // Menus-tab checkbox scale
-                PadCheckbox("Free Look", &s.ragdollCamFreeLook);
+                PadCheckbox("Disable Ragdoll Camera", &s.disableRagdollCamera);
                 ImGui::SetWindowFontScale(1.4f);
+                if (!BleedoutCameraOverride::IsAvailable()) {
+                    ImGui::TextWrapped("Camera blocking is unavailable because another camera hook changed the switch. Check OmniCam's log.");
+                }
                 ImGui::Dummy(ImVec2(0, Sx(6.0f)));
-                RenderSlider("FOV", &s.ragdollCamFov,
-                             Defaults::FirstPersonFOV.min, Defaults::FirstPersonFOV.max,
-                             Defaults::FirstPersonFOV.step, 90.0f);
+                if (!s.disableRagdollCamera) {
+                    ImGui::SetWindowFontScale(2.1f);
+                    PadCheckbox("Free Look", &s.ragdollCamFreeLook);
+                    ImGui::SetWindowFontScale(1.4f);
+                    ImGui::Dummy(ImVec2(0, Sx(6.0f)));
+                    RenderSlider("FOV", &s.ragdollCamFov,
+                                 Defaults::FirstPersonFOV.min, Defaults::FirstPersonFOV.max,
+                                 Defaults::FirstPersonFOV.step, 90.0f);
 
+                }
                 ImGui::Dummy(ImVec2(0, Sx(8.0f)));
                 ImGui::Separator();
                 ImGui::Dummy(ImVec2(0, Sx(8.0f)));
@@ -10971,17 +11202,18 @@ namespace DietDrCamera
                 ImGui::Dummy(ImVec2(0, Sx(10.0f)));
                 ImGui::SetWindowFontScale(2.1f);   // Menus-tab checkbox scale
                 PadCheckbox("Disable Vanity Camera", &s.disableVanityCamera);
+                sExtrasPadTabs.EntryItem();
                 ImGui::SetWindowFontScale(1.4f);
-                ImGui::Dummy(ImVec2(0, Sx(6.0f)));
-                if (s.disableVanityCamera) PadBeginDisabled();
-                RenderSlider("Idle Timer", &s.vanityIdleSeconds, 5.0f, 600.0f, 1.0f, 120.0f,
-                             nullptr, "Reset To Default", false, "%.0fs");
-                ImGui::BeginGroup();
-                RenderProfileBlock(&s.vanityCamera, CameraProfile::Default3p());
-                ImGui::EndGroup();
-                MarkEntryHover(EntryClipKind::Camera, &s.vanityCamera, "Vanity Camera");
-                RenderTransitionOverride(&s.vanityCamera);
-                if (s.disableVanityCamera) PadEndDisabled();
+                if (!s.disableVanityCamera) {
+                    ImGui::Dummy(ImVec2(0, Sx(6.0f)));
+                    RenderSlider("Idle Timer", &s.vanityIdleSeconds, 5.0f, 600.0f, 1.0f, 120.0f,
+                                 nullptr, "Reset To Default", false, "%.0fs");
+                    ImGui::BeginGroup();
+                    RenderProfileBlock(&s.vanityCamera, CameraProfile::Default3p());
+                    ImGui::EndGroup();
+                    MarkEntryHover(EntryClipKind::Camera, &s.vanityCamera, "Vanity Camera");
+                    RenderTransitionOverride(&s.vanityCamera);
+                }
                 sMediumScale = false;
                 ImGui::EndTabItem();
             }
@@ -12984,6 +13216,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_melee_noise_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 const float meleeExactW = CachedTabStripPopupWidth(sWtoTabStrip);
                 sWtoMeasuredWidth.Pixels(UiScale()) = meleeExactW > 0.0f
@@ -13099,6 +13332,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_magic_hand_noise_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Per Hand Overrides");
                 if (entryName && entryName[0]) {
@@ -13232,6 +13466,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_locn_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Location Override");
                 if (entryName && entryName[0]) {
@@ -13427,6 +13662,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_locfxb_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Location Override");
                 if (entryName && entryName[0]) {
@@ -13640,6 +13876,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_locfp_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Location Override (First Person)");
                 if (entryName && entryName[0]) {
@@ -13775,6 +14012,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_locdlg_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Location Override");
                 if (entryName && entryName[0]) {
@@ -13938,6 +14176,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##entry_locbcam_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 PopupCenteredText("Location Override");
                 if (entryName && entryName[0]) {
@@ -14143,6 +14382,8 @@ namespace DietDrCamera
             collect(definition.secondaryEntries);
             return tab;
         }
+
+#include "SliderApplyTargets.inl"
     }
 
     // Single pair table backing both QuickTune_CategoriesToTL (forward)
@@ -15241,12 +15482,14 @@ namespace DietDrCamera
         // box is open.
         auto* playerCam = RE::PlayerCamera::GetSingleton();
         auto* uiPtr     = RE::UI::GetSingleton();
-        const bool inDialogue = uiPtr && uiPtr->IsMenuOpen("Dialogue Menu");
         const int  stateId    = (playerCam && playerCam->currentState)
                               ? static_cast<int>(playerCam->currentState->id) : -1;
-        const bool inBleedout = stateId == static_cast<int>(RE::CameraState::kBleedout);
-        const bool inVanity   = VanityCamera::IsActive() || stateId == static_cast<int>(RE::CameraState::kAutoVanity);
-        const bool in1p       = !inVanity && playerCam && playerCam->IsInFirstPerson();
+        const bool inBleedout = stateId == static_cast<int>(RE::CameraState::kBleedout) ||
+            BleedoutCameraOverride::IsEventActive(true) || BleedoutCameraOverride::IsEventActive(false);
+        const bool inDialogue = !inBleedout && uiPtr && uiPtr->IsMenuOpen("Dialogue Menu");
+        const bool inVanity   = !s.disableVanityCamera && !inBleedout &&
+            (VanityCamera::IsActive() || stateId == static_cast<int>(RE::CameraState::kAutoVanity));
+        const bool in1p       = !inBleedout && !inVanity && playerCam && playerCam->IsInFirstPerson();
         const bool isSpecial  = inDialogue || in1p || inBleedout || inVanity;
         const bool threeP     = !isSpecial;
 
@@ -16335,12 +16578,14 @@ namespace DietDrCamera
             // (Unrelenting Force, paralysis, â€¦) through BleedoutCameraState, so
             // split the layout the same way the cinematic driver does: real
             // death â†’ Death Camera sliders, ragdoll â†’ Ragdoll Camera sliders.
-            const bool realDeath = HookManager::IsBleedoutRealDeath();
+            const bool realDeath = stateId == static_cast<int>(RE::CameraState::kBleedout)
+                ? HookManager::IsBleedoutRealDeath() : BleedoutCameraOverride::IsEventActive(true);
             if (realDeath) {
                 drawPresetHeader("Death");
                 qtFlush();
                 if (beginBox("##qt_death", "Death Camera", 1.3f)) {
-                    DrawQTSlider("FOV", &s.deathCameraFov, 40.0f, 140.0f);
+                    if (!s.disableDeathCamera)
+                        DrawQTSlider("FOV", &s.deathCameraFov, 40.0f, 140.0f);
                     if (!s.deathCameraInfiniteDuration)
                         DrawQTSlider("Hold Duration", &s.deathCameraHoldDuration, 1.0f, 30.0f);
                     DrawQTSlider("Slow Motion %",        &s.deathCameraSlowmoStrength, 0.0f, 90.0f);
@@ -16351,17 +16596,19 @@ namespace DietDrCamera
                 drawPresetHeader("Ragdoll");
                 qtFlush();
                 if (beginBox("##qt_ragdoll", "Ragdoll Camera", 1.3f)) {
-                    PadCheckbox("Free Look", &s.ragdollCamFreeLook);
-                    // "Free Look" is a left-aligned checkbox; its narrow column
-                    // doesn't overlap the wider slider tracks below (which start
-                    // past the label column), so strict-column d-pad DOWN finds
-                    // nothing and the user has to press RIGHT to reach the
-                    // sliders. Mark it as a tab so DOWN falls through to the
-                    // first slider (same remedy as the dialogue New Preset row).
-                    PadMarkLastItemTab();
-                    ImGui::Dummy(ImVec2(0, Sx(4.0f)));
-                    DrawQTSlider("FOV", &s.ragdollCamFov,
-                                 Defaults::FirstPersonFOV.min, Defaults::FirstPersonFOV.max);
+                    if (!s.disableRagdollCamera) {
+                        PadCheckbox("Free Look", &s.ragdollCamFreeLook);
+                        // "Free Look" is a left-aligned checkbox; its narrow column
+                        // doesn't overlap the wider slider tracks below (which start
+                        // past the label column), so strict-column d-pad DOWN finds
+                        // nothing and the user has to press RIGHT to reach the
+                        // sliders. Mark it as a tab so DOWN falls through to the
+                        // first slider (same remedy as the dialogue New Preset row).
+                        PadMarkLastItemTab();
+                        ImGui::Dummy(ImVec2(0, Sx(4.0f)));
+                        DrawQTSlider("FOV", &s.ragdollCamFov,
+                                     Defaults::FirstPersonFOV.min, Defaults::FirstPersonFOV.max);
+                    }
                     DrawQTSlider("Slow Motion %",        &s.ragdollCamSlowmoStrength, 0.0f, 90.0f);
                     DrawQTSlider("Slow Motion Duration", &s.ragdollCamSlowmoDuration, 0.0f, 15.0f);
                     ImGui::Dummy(ImVec2(0, Sx(2.0f)));
@@ -18429,6 +18676,7 @@ namespace DietDrCamera
     // the three, so switching sections keeps your place.
     static void RenderSpecificAnimationsTab(int a_mode)
     {
+        const SliderApplySuppression suppressApply;
         using namespace ImGuiMCP;
         auto& s   = SettingsManager::GetSingleton();
         auto& ctl = AnimationCameraController::GetSingleton();
@@ -18628,7 +18876,7 @@ namespace DietDrCamera
         // sources under their effect name with a separator and a
         // disabled-text section header per group.
         enum class Kind {
-            AttackLag, FleeFraming, DamageReaction, CombatFraming, DrawSource, JumpNoise, HeadBob,
+            AttackLag, FleeFraming, DamageReaction, CombatFraming, CombatFOV, DrawSource, JumpNoise, HeadBob,
             // StairSmoothing removed 2026-08-15 â€” always on at max now
             // (a fix, not a preference); see the [STAIRS] block in
             // HookManager.
@@ -18654,6 +18902,7 @@ namespace DietDrCamera
             { "Flee Framing",       Kind::FleeFraming,       0 },
             { "Damage Reaction",    Kind::DamageReaction,   0 },
             { "Crowd Modifier",     Kind::CombatFraming,    0 },
+            { "Combat FOV",         Kind::CombatFOV,        0 },
             // Weapons â€” the draw / put-away beat (one entry, both directions)
             { "Sheathe / Unsheathe", Kind::DrawSource, 0 },
             // Movement â€” the airborne arc split into its three phases
@@ -18823,6 +19072,7 @@ namespace DietDrCamera
                         case Kind::AttackLag:           header = "Combat";                      break;
                         case Kind::DamageReaction:      break;
                         case Kind::CombatFraming:       break;
+                        case Kind::CombatFOV:           break;
                         case Kind::FleeFraming:         /* same Combat group â€” no header */     break;
                         case Kind::DrawSource:          header = "Weapons";                     break;
                         case Kind::JumpNoise:           header = "Movement";                    break;
@@ -18998,6 +19248,21 @@ namespace DietDrCamera
                 RenderSlider("Strength", &s.fleeFramingStrength, 0.0f, 1.0f, 0.01f, 0.0f,
                              nullptr, "Reset To Default");
                 break;
+            case Kind::CombatFOV: {
+                sCombatFovPanelFrame = ImGui::GetFrameCount();
+                ImGui::TextWrapped("Changes the world FOV during combat and blends back when combat ends.");
+                ImGui::Dummy(ImVec2(0, Sx(8.0f)));
+                PadCheckbox("Enable Combat FOV", &s.combatFov.enabled);
+                if (s.combatFov.enabled) {
+                    ImGui::Dummy(ImVec2(0, Sx(8.0f)));
+                    const CombatFOV::Tuning defaults;
+                    RenderSlider("FOV", &s.combatFov.fov,
+                        CombatFOV::kMinFOV, CombatFOV::kMaxFOV, 1.0f, defaults.fov);
+                    RenderSlider("Transition Speed", &s.combatFov.transitionSpeed,
+                        CombatFOV::kMinSpeed, CombatFOV::kMaxSpeed, 0.05f, defaults.transitionSpeed);
+                }
+                break;
+            }
             case Kind::CombatFraming: {
                 ImGui::TextWrapped("Increases zoom distance and FOV around groups of enemies.");
                 fxPovBegin("Third Person", "fx_crowd_tp");
@@ -19600,6 +19865,7 @@ namespace DietDrCamera
             if (PadBeginPopupModal("##fp_melee_popup", nullptr,
                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                const SliderApplySuppression suppressApply;
                 ImGui::SetWindowFontScale(1.4f);
                 const float meleeExactW = CachedTabStripPopupWidth(sFpWtoTabStrip);
                 sFpWtoMeasuredWidth = meleeExactW > 0.0f
@@ -20963,6 +21229,7 @@ namespace DietDrCamera
 
     static void RenderSpecificWeaponsTabBody(SettingsManager& s, SpecWeaponsSection section)
     {
+        const SliderApplySuppression suppressApply;
         using namespace ImGuiMCP;
         EnsureMenuUiScale();
 

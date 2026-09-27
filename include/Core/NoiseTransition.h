@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace DietDrCamera
@@ -14,6 +15,27 @@ namespace DietDrCamera
         incoming = x == 1.0f ? 1.0f : std::sin(s * 1.5707963f);
         outgoing = x == 1.0f ? 0.0f : std::cos(s * 1.5707963f);
     }
+
+    // A second cast can replace the first while its shout state and profile
+    // stay active. The envelope restarts anyway, so retain the outgoing signal
+    // just as for a profile change. The start identity is stable through charge,
+    // release, duplicate fire events and menu pauses.
+    class ShoutNoiseRestart
+    {
+    public:
+        bool Observe(bool active, std::uint64_t start)
+        {
+            const bool restarted = active && active_ && start != 0 &&
+                start_ != 0 && start != start_;
+            active_ = active;
+            start_ = active ? start : 0;
+            return restarted;
+        }
+
+    private:
+        std::uint64_t start_ = 0;
+        bool active_ = false;
+    };
 
     // An interrupted blend is still a blend of real signals, not a new signal
     // made from averaged parameters. Retain its layers, clocks and fade progress.

@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Hooks/ProjectileImpact.h"
 #include "Camera/ArcheryHitShakeController.h"
 #include "Camera/CameraNoiseController.h"
 #include "Camera/DamageReactionController.h"
@@ -15,8 +16,7 @@ namespace DietDrCamera::ArcheryHitShakeController
         ArcheryHitShake::ShotBridge bridge;
         namespace Motion = HitShakeMotion;
         using UpdateFn = void(*)(RE::Projectile*, float);
-        using ImpactFn = void(*)(RE::Projectile*, RE::TESObjectREFR*, const RE::NiPoint3&, const RE::NiPoint3&,
-                                RE::hkpCollidable*, std::int32_t, std::uint32_t);
+        using ImpactFn = ProjectileImpact::Function;
         UpdateFn originalUpdate = nullptr;
         ImpactFn originalImpact = nullptr;
 
@@ -53,7 +53,7 @@ namespace DietDrCamera::ArcheryHitShakeController
             originalUpdate(projectile, dt);
         }
 
-        void AddImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
+        ProjectileImpact::Result AddImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
                        const RE::NiPoint3& velocity, RE::hkpCollidable* collidable, std::int32_t arg6, std::uint32_t arg7)
         {
             CameraNoiseController::NotifyNpcArcheryFlight(projectile, position, true, target && target->IsPlayerRef());
@@ -78,8 +78,9 @@ namespace DietDrCamera::ArcheryHitShakeController
                     distance = ArcheryHitShake::ImpactDistance({from.x, from.y, from.z}, {to.x, to.y, to.z});
                 }
             }
-            originalImpact(projectile, target, position, velocity, collidable, arg6, arg7);
+            const auto result = originalImpact(projectile, target, position, velocity, collidable, arg6, arg7);
             if (eligible) bridge.Contact(id, weapon, targetID, travel, now, distance);
+            return result;
         }
 
         SettingsManager::NoiseProfile* CurrentProfile(RE::PlayerCharacter* player, bool firstPerson,
@@ -121,7 +122,7 @@ namespace DietDrCamera::ArcheryHitShakeController
         // including DDC's existing aim correction, without taking aim ownership.
         REL::Relocation<std::uintptr_t> table{RE::VTABLE_ArrowProjectile[0]};
         originalUpdate = reinterpret_cast<UpdateFn>(table.write_vfunc(0xAB, &UpdateProjectile));
-        originalImpact = reinterpret_cast<ImpactFn>(table.write_vfunc(0xBD, &AddImpact));
+        originalImpact = reinterpret_cast<ImpactFn>(table.write_vfunc(0xBD, static_cast<ImpactFn>(&AddImpact)));
         spdlog::info("[HITSHAKE-ARCHERY] native arrow/bolt launch, flyby and contact observers installed");
     }
 

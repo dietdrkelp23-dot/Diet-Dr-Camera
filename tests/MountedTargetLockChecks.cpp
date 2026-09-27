@@ -150,6 +150,24 @@ int main()
             }
         }
     }
+    // Compare a fixed wall-clock interval across render rates. The former
+    // fixed 1/60 step made on-foot acquisition four times faster at 240 FPS.
+    float timingReference = 0.0f;
+    for (const int fps : {30, 60, 120, 144, 240}) {
+        float position = 0.0f, velocity = 0.0f, elapsed = 0.0f;
+        for (int frame = 0; frame < fps; ++frame) {
+            const float dt = MountedTargetLock::FrameTime(1.0f / fps);
+            elapsed += dt;
+            DietDrCamera::CriticalDampedSpringExact(position, velocity, 1.0f, 4.0f, dt);
+        }
+        Check(std::abs(elapsed - 1.0f) < .00001f, "target-lock clock depends on frame rate");
+        if (fps == 30) timingReference = position;
+        Check(std::abs(position - timingReference) < .00001f, "target-lock acquisition depends on frame rate");
+    }
+    Check(MountedTargetLock::FrameTime(0.0f) == 0.0f && MountedTargetLock::FrameTime(-1.0f) == 0.0f,
+        "paused or invalid frame advanced target lock");
+    Check(MountedTargetLock::FrameTime(std::numeric_limits<float>::quiet_NaN()) == 0.0f &&
+        MountedTargetLock::FrameTime(2.0f) == .05f, "invalid or stalled frame escaped the timing bound");
     MountedTargetLock invalid;
     invalid.Sample(1, 0, true, .016f);
     invalid.Sample(2, .02f, true, .016f);

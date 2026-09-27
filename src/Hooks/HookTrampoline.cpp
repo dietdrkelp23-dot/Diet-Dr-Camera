@@ -11,7 +11,7 @@ namespace DietDrCamera::HookTrampoline
         std::call_once(once, [] {
             auto& trampoline = SKSE::GetTrampoline();
             if (!trampoline.empty()) {
-                SKSE::stl::report_and_fail("Diet Dr Camera's trampoline was initialized before its shared hook reservation.");
+                SKSE::stl::report_and_fail("OmniCam's trampoline was initialized before its shared hook reservation.");
             }
             if (SKSE::GetTrampolineInterface()) {
                 SKSE::AllocTrampoline(capacity);
@@ -21,7 +21,7 @@ namespace DietDrCamera::HookTrampoline
                 trampoline.create(capacity);
             }
             if (trampoline.capacity() < capacity) {
-                SKSE::stl::report_and_fail("Diet Dr Camera could not reserve its shared hook trampoline.");
+                SKSE::stl::report_and_fail("OmniCam could not reserve its shared hook trampoline.");
             }
             spdlog::info("[Hooks] Shared trampoline reserved: {} bytes", trampoline.capacity());
         });

@@ -4,6 +4,8 @@
 #include "Core/NoiseTransition.h"
 #include "Core/FirstPersonNoise.h"
 
+namespace DietDrCamera::ProjectileFlyby { struct BeamContact; }
+
 namespace DietDrCamera
 {
     // Camera noise (v3, state-keyed). Layers additive Perlin shake onto
@@ -17,6 +19,8 @@ namespace DietDrCamera
     {
     public:
         [[nodiscard]] static CameraNoiseController& GetSingleton();
+
+        static void InitializeGameForms(); // optional cosmetic-projectile exclusions after DataLoaded
 
         void InstallHook();  // trampoline TESCamera::Update post-call
 
@@ -34,6 +38,7 @@ namespace DietDrCamera
         static void NotifyNpcMagicFlight(RE::Projectile* a_projectile, const RE::NiPoint3& a_pos,
                                         bool a_terminal = false, bool a_hitPlayer = false);
         static void NotifyNpcMagicShot(RE::ObjectRefHandle a_shooter, RE::FormID a_spell, RE::FormID a_projectile);
+        static void NotifyNpcMagicBeam(const ProjectileFlyby::BeamContact& a_contact);
 
         // This frame's TOTAL rotation + translation the 3p noise stack
         // applied to cameraRoot (ambient layers, beats, head bob, Repulse

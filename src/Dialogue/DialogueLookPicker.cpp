@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Dialogue/DialogueLookPicker.h"
+#include "Dialogue/DBVOIntegration.h"
 
 #include "Dialogue/SpeakerClassifier.h"
 #include "Settings/SettingsManager.h"
@@ -13,7 +14,6 @@
 #include <RE/M/MenuTopicManager.h>
 #include <RE/P/PlayerCamera.h>
 #include <RE/P/PlayerCharacter.h>
-#include <RE/S/SubtitleManager.h>
 #include <RE/T/TESBoundObject.h>
 #include <RE/T/TESDataHandler.h>
 #include <RE/T/TESObjectREFR.h>
@@ -258,6 +258,8 @@ namespace DietDrCamera::DialogueLookPicker
 
     void OnDialogueOpen(bool allowReroll)
     {
+        // Re-resolving a look / POV is not a new conversation.
+        if (allowReroll) DBVOIntegration::Reset();
         auto& s = SettingsManager::GetSingleton();
 
         auto* speaker = GetCurrentSpeaker();
@@ -355,6 +357,7 @@ namespace DietDrCamera::DialogueLookPicker
 
     void OnDialogueClose()
     {
+        DBVOIntegration::Reset();
         auto& s = SettingsManager::GetSingleton();
         s.activeDialogueBucketIdx = -1;
         s.activeDialogueLookIdx   = -1;
@@ -429,29 +432,7 @@ namespace DietDrCamera::DialogueLookPicker
 
     bool IsPlayerVoiceLinePlaying()
     {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return false;
-
-        // Path 1 — the engine's own voice state on the player. A player-voice
-        // mod that speaks through Say() drives this, and it's the most direct
-        // statement the engine makes about "this actor is currently
-        // vocalising".
-        if (auto* high = player->GetHighProcess()) {
-            const auto vs = high->voiceState.get();
-            if (vs == RE::VOICE_STATE::kStart || vs == RE::VOICE_STATE::kContinue)
-                return true;
-        }
-
-        // Path 2 — the subtitle currently on screen belongs to the player.
-        // Catches mods that route their line through the subtitle system on a
-        // different path. Costs one pointer compare.
-        if (auto* subs = RE::SubtitleManager::GetSingleton()) {
-            if (auto sp = subs->currentSpeaker.get();
-                sp && sp.get() == static_cast<RE::TESObjectREFR*>(player)) {
-                return true;
-            }
-        }
-        return false;
+        return DBVOIntegration::IsPlayerVoiceLinePlaying();
     }
 
     RE::TESObjectREFR* GetActiveSpeakerRef()
@@ -470,16 +451,13 @@ namespace DietDrCamera::DialogueLookPicker
 
     bool ShouldLookAtPlayer()
     {
-        // Feature REMOVED at user request 2026-08-15 ("remove the switch to
-        // the player when choosing a dialogue option toggle as well as the
-        // whole feature"). The API stays so consumers need no change; it
-        // simply never fires. The old dialogue_lock_on_player_face TOML key
-        // is ignored on load.
-        return false;
+        return DBVOIntegration::ShouldLookAtPlayer();
     }
 
     void Tick(float a_dt)
     {
+        // Runs in either POV and even when no random-look bucket is selected.
+        DBVOIntegration::Tick();
         auto* ui = RE::UI::GetSingleton();
         if (!ui || !ui->IsMenuOpen("Dialogue Menu")) return;
         auto& s = SettingsManager::GetSingleton();

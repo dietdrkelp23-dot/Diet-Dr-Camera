@@ -10,6 +10,80 @@ namespace Reaction = DamageReaction;
 static void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 #include "CreatureMagicRecords.inc"
 
+static void CheckNativeValueApplications()
+{
+    // ModifyOnStart/Update pass kNone (-1). The engine resolves it using
+    // ValueModifierEffect::actorValue, including shock's dual AV effect.
+    Require(Reaction::IsHarmfulValueApplication(-10,true,true,-1,24),
+        "Native default health application loses its damage reaction");
+    Require(Reaction::IsHarmfulValueApplication(-10,true,true,-1,24,true,25,.5f),
+        "A dual shock health/magicka application loses its damage reaction");
+    Require(Reaction::IsHarmfulValueApplication(-10,true,true,25,24,true,25,.5f),
+        "Dual AV dispatch incorrectly uses the ignored requested AV");
+    Require(!Reaction::IsHarmfulValueApplication(-10,true,true,25,24),
+        "An explicit magicka application is mistaken for the stored health AV");
+    Require(Reaction::IsHarmfulValueApplication(-10,true,true,-1,25,true,24,.5f),
+        "Damage to a dual effect's secondary health AV is missed");
+    Require(!Reaction::IsHarmfulValueApplication(-10,true,true,-1,25,true,24,0) &&
+        !Reaction::IsHarmfulValueApplication(-10,true,true,-1,25,true,24,-.5f) &&
+        !Reaction::IsHarmfulValueApplication(-10,true,true,-1,25,true,24,std::numeric_limits<float>::infinity()),
+        "An absent, restorative or non-finite secondary application became damage");
+    Require(!Reaction::IsHarmfulValueApplication(-10,true,true,-1,25,true,26,.5f) &&
+        !Reaction::IsHarmfulValueApplication(-10,false,false,-1,24) &&
+        !Reaction::IsHarmfulValueApplication(10,true,true,-1,24) &&
+        !Reaction::IsHarmfulValueApplication(0,true,true,-1,24) &&
+        !Reaction::IsHarmfulValueApplication(-10,true,true,-1,-1),
+        "Utility, restoration or unresolved AV callbacks became damage");
+}
+
+static void CheckPassiveValueSources()
+{
+    // Captured after Vampire Lord transformation: Scion's
+    // MAG_VampireWeaknessSunLord and Sun Affects NPC Vampires' _SunDamage
+    // are constant, self-delivered abilities (type 4) with duration zero.
+    // Their negative health callbacks previously rearmed discrete shakes
+    // indefinitely, including when no caster was available.
+    for (const bool self : {false, true}) {
+        for (const int type : {1, 4, 10})
+            Require(!Reaction::IsIncomingValueSource(type, self),
+                "A passive ability, disease or addiction became an incoming hit");
+    }
+    for (const int type : {-1, 0, 2, 3, 5, 6, 7, 8, 11, 12, 13}) {
+        Require(!Reaction::IsIncomingValueSource(type, true),
+            "A self-applied health effect became an incoming hit");
+        Require(Reaction::IsIncomingValueSource(type, false),
+            "An enemy spell, poison, enchantment or source-less hazard was excluded");
+    }
+
+    const Reaction::Basis basis{{1,0,0},{0,1,0},{0,0,1}};
+    for (bool fp : {false,true}) {
+        Reaction::Mixer withPassive, attacksOnly;
+        for (int frame = 0; frame < 1200; ++frame) {
+            const double now = 10.0 + frame / 60.0;
+            Reaction::Contact sun{Reaction::Kind::Magic, {}, now, 0, 42};
+            sun.origin = Reaction::Contact::Origin::Effect;
+            // The recorded effects can look harmful while still not being
+            // incoming attacks. Do not silence legitimate damage by magnitude.
+            if (Reaction::IsHarmfulValueApplication(-0.01f,false,true,-1,24) &&
+                Reaction::IsIncomingValueSource(4,false))
+                withPassive.Add(sun,{2},basis,fp,now);
+            if (frame == 30) {
+                Reaction::Contact hammer{Reaction::Kind::CenturionHammer,{1,0,0},now,7,99};
+                hammer.power = true;
+                withPassive.Add(hammer,{2},basis,fp,now);
+                attacksOnly.Add(hammer,{2},basis,fp,now);
+            }
+            const auto actual = withPassive.Advance(1.0f/60,fp);
+            const auto expected = attacksOnly.Advance(1.0f/60,fp);
+            Require(actual.pitch == expected.pitch && actual.yaw == expected.yaw && actual.roll == expected.roll,
+                "Passive sunlight altered combat noise or kept it running after leaving the fight");
+        }
+        const auto settled = withPassive.Advance(0,fp);
+        Require(settled.pitch == 0 && settled.yaw == 0 && settled.roll == 0,
+            "Sunlight callbacks left an endless camera reaction");
+    }
+}
+
 static void CheckMagicContacts()
 {
     using Origin = Reaction::Contact::Origin;
@@ -69,6 +143,26 @@ static void CheckMagicContacts()
     CreatureMagic::Effect frost{"CustomIceDamage", 0, 24, -1, -1, 1, 2, 2, true, true, true, false, false, true};
     Require(CreatureMagic::EffectKind(frost) == Reaction::Kind::Frost,
         "A frost-keyword attack with generic resistance lost its element");
+
+    CreatureMagic::Effect lightning{"ShockDamage", 5, 24, 25, 42, 1, 2, 2, true, true};
+    lightning.beam = true;
+    spell = {}; spell.Include(lightning);
+    Require(spell.Impact(1,0) == Reaction::Kind::Shock,
+        "A finite lightning beam loses its native spell-hit contact");
+    lightning.continuous = true; spell = {}; spell.Include(lightning);
+    Require(!spell.Impact(1,0), "A continuous beam repeats discrete damage jolts");
+    lightning.continuous = false; lightning.casting = 2; spell = {}; spell.Include(lightning);
+    Require(!spell.Impact(2,0), "Concentration shock becomes a train of impact jolts");
+    for (int view : {0,1}) for (bool effectFirst : {false,true}) {
+        inbox.Clear(); inbox.SetView(view); token = inbox.Token();
+        hit = {Reaction::Kind::Shock,{1,0,0},20,7,42};
+        hit.origin = effectFirst ? Origin::Effect : Origin::MagicImpact;
+        inbox.Push(hit,token);
+        hit.origin = effectFirst ? Origin::MagicImpact : Origin::Effect;
+        inbox.Push(hit,token);
+        Require(inbox.Drain(20,out) == 1 && out[0].kind == Reaction::Kind::Shock,
+            "Beam contact and health application double a shock hit in either view");
+    }
 }
 static float Magnitude(Reaction::Rotation r) { return std::sqrt(r.pitch*r.pitch + r.yaw*r.yaw + r.roll*r.roll); }
 static float Difference(Reaction::Rotation a, Reaction::Rotation b) { return Magnitude({a.pitch-b.pitch,a.yaw-b.yaw,a.roll-b.roll}); }
@@ -226,8 +320,10 @@ static void CheckBlockUtilityDuringDamage()
 
 int main() try
 {
+    CheckNativeValueApplications();
     CheckCreatureSpells();
     CheckMagicContacts();
+    CheckPassiveValueSources();
     CheckBlockUtilityDuringDamage();
     CheckCreatureRoster();
     CheckAttackProfiles();

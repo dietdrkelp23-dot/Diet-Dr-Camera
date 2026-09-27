@@ -1,4 +1,102 @@
-# Runtime test matrix — 1.2.0, September 19, 2026
+# Runtime test matrix - 1.2.1
+
+The latest symmetric R3 hold candidate passes clean preflight and **68 vtable identities on all 12 available current Steam targets**, plus 43 CTests. This verifies the new FirstPersonState input hook; it does not reclassify the historical gameplay rows below. Both GOG executable fixtures remain missing. Evidence: `build/diagnostics/pov-hold-20260926/supported-runtime-images/`. The author confirmed the preceding R3 tap fix on 1.6.1170; timing parity awaits an in-game retest.
+
+Current 1.2.1 support starts at SE **1.5.97**. Older SE rows below are retained as historical evidence; they are excluded from the current loader and active test plan. The subsequent R3 tap fix passes the build and 43 CTests; prior live results identify the earlier DLL and do not certify the revised camera input behavior.
+
+All 21 available Steam executable fixtures pass all 20 camera/hook scenarios
+(**420/420**) and **67 vtable method-identity checks per executable**.
+The explicit source-ID audit finds all 60 required IDs for all 23 loader targets.
+GOG 1.6.659 and 1.6.1179 executable fixtures remain unavailable.
+These are offline checks and do not execute game code. Separately, ten Steam
+runtimes now have confirmed live startup and captured camera/POV/dialogue activity;
+full gameplay acceptance is still ungraded. See [RUNTIME-LIVE-RESULTS.md](RUNTIME-LIVE-RESULTS.md).
+
+Eleven isolated runtime installations and 44 comparison/integration profiles are
+prepared for manual tests. Their file, version and dependency checks pass; see
+[RUNTIME-LIVE-TESTING.md](RUNTIME-LIVE-TESTING.md). All eleven have now been attempted: 1.5.73 fails in
+SMF 3.18’s trampoline allocation under SKSE 2.0.15; the other ten have startup
+confirmed from logs. Integration/comparison
+profiles and the complete gameplay checklist remain unaccepted.
+
+| Runtime | Offline scenarios | Method identities | Startup | Gameplay coverage |
+| --- | --- | --- | --- | --- |
+| 1.5.3 | 20/20 | 67 | Not run | Not run |
+| 1.5.16 | 20/20 | 67 | Not run | Not run |
+| 1.5.23 | 20/20 | 67 | Not run | Not run |
+| 1.5.39 | 20/20 | 67 | Not run | Not run |
+| 1.5.50 | 20/20 | 67 | Not run | Not run |
+| 1.5.53 | 20/20 | 67 | Not run | Not run |
+| 1.5.62 | 20/20 | 67 | Not run | Not run |
+| 1.5.73 | 20/20 | 67 | Failed — SMF dependency | Not reached |
+| 1.5.80 | 20/20 | 67 | Not run | Not run |
+| 1.5.97 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.317 | 20/20 | 67 | Not run | Not run |
+| 1.6.318 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.323 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.342 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.353 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.629 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.640 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.659 | Missing executable | Not checked | Not run | Not run |
+| 1.6.1130 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.1170 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+| 1.6.1179 | Missing executable | Not checked | Not run | Not run |
+| 1.7.99 | 20/20 | 67 | Not run | Not run |
+| 1.7.104 | 20/20 | 67 | Confirmed from logs | Partial; ungraded |
+
+Evidence: `build/diagnostics/rollback-1.2.1-20260926-185850/runtime-matrix/`
+and `runtime-address-audit.json` alongside it. RELEASE-CHECKLIST.md records
+the standalone build/test gate. Development movement scenarios were retired
+with their production hooks; camera and compatibility regressions remain.
+
+## Historical September 24 development audit
+
+The following evidence describes the earlier native movement builds, not 1.2.1.
+
+September 24 development builds passed **735 offline scenarios across 21 Steam runtimes**
+and **47 CTests in each of the release and native-movement configurations**.
+The final identity inventory checks **67 shipping and 12 development vtable targets**
+on every available executable. Both GOG databases contain the required 79 explicit
+source IDs, but their executable fixtures remain unavailable. These candidates have
+not been launched in game. See [the detailed audit](RUNTIME-DEEP-AUDIT.md).
+
+| Runtime | Offline scenarios | Shipping / development targets | Current candidate gameplay |
+| --- | --- | --- | --- |
+| 1.5.3 | 35/35 | 67 / 12 | Not run |
+| 1.5.16 | 35/35 | 67 / 12 | Not run |
+| 1.5.23 | 35/35 | 67 / 12 | Not run |
+| 1.5.39 | 35/35 | 67 / 12 | Not run |
+| 1.5.50 | 35/35 | 67 / 12 | Not run |
+| 1.5.53 | 35/35 | 67 / 12 | Not run |
+| 1.5.62 | 35/35 | 67 / 12 | Not run |
+| 1.5.73 | 35/35 | 67 / 12 | Not run |
+| 1.5.80 | 35/35 | 67 / 12 | Not run |
+| 1.5.97 | 35/35 | 67 / 12 | Not run |
+| 1.6.317 | 35/35 | 67 / 12 | Not run |
+| 1.6.318 | 35/35 | 67 / 12 | Not run |
+| 1.6.323 | 35/35 | 67 / 12 | Not run |
+| 1.6.342 | 35/35 | 67 / 12 | Not run |
+| 1.6.353 | 35/35 | 67 / 12 | Not run |
+| 1.6.629 | 35/35 | 67 / 12 | Not run |
+| 1.6.640 | 35/35 | 67 / 12 | Not run |
+| 1.6.659 GOG | Missing executable | Not checked | Not run |
+| 1.6.1130 | 35/35 | 67 / 12 | Not run |
+| 1.6.1170 | 35/35 | 67 / 12 | Not run |
+| 1.6.1179 GOG | Missing executable | Not checked | Not run |
+| 1.7.99 | 35/35 | 67 / 12 | Not run |
+| 1.7.104 | 35/35 | 67 / 12 | Not run |
+
+Evidence: `build/diagnostics/runtime-deep-audit-20260924-195453/final-runtime-matrix/`
+and `final-vtable-matrix/`. The second report adds the final development sprint-slot
+and animation-graph identity checks; production code is unchanged between runs.
+The runner still reports incomplete coverage for GOG. Address availability and
+mapped-image validation do not establish full startup or gameplay compatibility.
+
+## Historical September 19 evidence
+
+The following counts, launch results and binary descriptions refer to the earlier
+builds and have been retained as historical evidence.
 
 The 1.2.0 release candidate repeated the offline matrix. All **21 Steam executable
 targets pass 210 offline scenarios** and checks of **47 hooked vtable targets

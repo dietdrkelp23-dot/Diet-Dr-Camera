@@ -6,6 +6,26 @@
 #include <stdexcept>
 #include "RuntimeImageCheck.h"
 
+namespace
+{
+    RE::TESAmmo* ReadFixtureAmmo(const RE::Actor*) { return reinterpret_cast<RE::TESAmmo*>(0x1234); }
+    RE::TESAmmo* WrongFixtureAmmo(const RE::Actor*) { return nullptr; }
+
+    void CheckAmmoDispatch(RE::PlayerCharacter* player)
+    {
+        // Upstream corrected the cross-VR wrapper's 0x9F ordinal. DDC builds
+        // flat SE/AE virtual dispatch; verify its actual compiler-selected slot.
+        std::array<std::uintptr_t, 0xA2> table{};
+        table[0x9E] = reinterpret_cast<std::uintptr_t>(&ReadFixtureAmmo);
+        table[0x9F] = reinterpret_cast<std::uintptr_t>(&WrongFixtureAmmo);
+        auto* vptr = table.data();
+        std::memcpy(player, &vptr, sizeof(vptr));
+        if (player->GetCurrentAmmo() != reinterpret_cast<RE::TESAmmo*>(0x1234))
+            throw std::runtime_error("ammo lookup dispatches to the wrong engine virtual slot");
+    }
+
+}
+
 int main(int argc, char** argv)
 {
     try {
@@ -37,6 +57,8 @@ int main(int argc, char** argv)
             auto* attack=reinterpret_cast<RE::AttackBlockHandler*>(storage.data());
             auto* thirdPerson=reinterpret_cast<RE::ThirdPersonState*>(storage.data());
             auto* orbitInput=static_cast<RE::PlayerInputHandler*>(thirdPerson);
+            auto* firstPerson=reinterpret_cast<RE::FirstPersonState*>(storage.data());
+            auto* firstPersonInput=static_cast<RE::PlayerInputHandler*>(firstPerson);
             if (offset(&player->GetPlayerRuntimeData())!=layout.playerData ||
                 offset(&player->GetPlayerFlags())!=layout.playerFlags ||
                 offset(&graphics->GetLetterbox())!=layout.letterbox ||
@@ -44,9 +66,16 @@ int main(int argc, char** argv)
                 DietDrCamera::RuntimeHooks::InputSlot(4)!=layout.buttonSlot ||
                 DietDrCamera::RuntimeHooks::InputSlot(5)!=layout.buttonSlot+1 ||
                 offset(orbitInput)!=0x20 || static_cast<RE::ThirdPersonState*>(orbitInput)!=thirdPerson ||
-                offset(&thirdPerson->freeRotation)!=0xD4)
+                offset(&thirdPerson->freeRotation)!=0xD4 ||
+                offset(firstPersonInput)!=0x20 || static_cast<RE::FirstPersonState*>(firstPersonInput)!=firstPerson)
                 throw std::runtime_error("wrong runtime layout for "+layout.version.string());
         }
+        for (const std::uint16_t patch : {3, 16, 23, 39, 50, 53, 62, 73, 80, 96}) {
+            if (DietDrCamera::RuntimeVersion::IsKnown({1,5,patch,0}))
+                throw std::runtime_error("SE runtime below the 1.5.97 support floor accepted");
+        }
+        // Check the actual compiler-selected ammo vtable slot.
+        CheckAmmoDispatch(reinterpret_cast<RE::PlayerCharacter*>(storage.data()));
         if (DietDrCamera::RuntimeVersion::IsKnown({1,7,105,0}) || DietDrCamera::RuntimeVersion::IsKnown({1,4,15,0}))
             throw std::runtime_error("unknown or VR runtime accepted");
         std::cout << "SE, early AE, post-629 AE, GOG and 1.7 layout checks passed\n";

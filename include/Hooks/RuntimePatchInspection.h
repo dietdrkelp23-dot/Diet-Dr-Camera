@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <span>
 #include <vector>
@@ -18,6 +19,12 @@ namespace DietDrCamera::RuntimePatchInspection
     };
 
     using Instructions = std::vector<Instruction>;
+    // Recognize only FF 25 00 00 00 00 followed by its inline 64-bit target
+    // at the function entry. Decode excludes that pointer from instructions;
+    // the caller must validate the destination before accepting live hooks.
+    std::optional<std::uintptr_t> InlineEntryJumpTarget(std::span<const std::uint8_t> code);
+    // E9 rel32 plus one NOP; reject destinations that cannot be represented.
+    std::optional<std::array<std::uint8_t, 6>> RelativeJump6(std::uintptr_t address, std::uintptr_t target);
     std::optional<Instructions> Decode(std::span<const std::uint8_t> code, std::uintptr_t address);
     std::optional<std::size_t> UniqueCall(const Instructions& instructions, std::uintptr_t target);
     // Validate a known call without decoding unrelated code after the site.

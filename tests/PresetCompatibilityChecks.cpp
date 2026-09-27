@@ -830,6 +830,9 @@ void CheckStaffRitualProfiles(SettingsManager& s)
 #include "ProjectileTracingPresetChecks.inc"
 #include "MagicHitShakePresetChecks.inc"
 #include "TargetLockBiasPresetChecks.inc"
+#include "CombatFOVPresetChecks.inc"
+#include "DBVOPresetChecks.inc"
+#include "BleedoutCameraPresetChecks.inc"
 
 int main(int argc, char** argv) try
 {
@@ -909,6 +912,26 @@ int main(int argc, char** argv) try
         "Pitch Bias did not reset to neutral");
 
     CheckTargetLockBiasPresets(s);
+    CheckCombatFOVPresets(s);
+    CheckDBVOCameraPresets(s);
+    CheckBleedoutCameraPresets(s);
+
+    s.ResetAllToVanilla();
+    Require(s.tlSheathed.pitchOffset == 0, "Native lock changed the default profile pitch");
+    // Revision 22's rejected framing key must not revive a hidden focus drop
+    // or be migrated into a compensating profile tilt when that preset loads.
+    for (float framing : {0.0f,.25f,1.0f}) for (float tilt : {-10.0f,0.0f,10.0f}) {
+        s.ResetAllToVanilla();
+        s.tlSheathed.pitchOffset = tilt;
+        auto oldPreset = s.BuildSaveTable();
+        oldPreset.insert_or_assign("meta",toml::table{{"format",14}});
+        oldPreset.insert_or_assign("general",toml::table{{"target_lock_vertical_framing",double(framing)}});
+        Require(s.ApplyTable(oldPreset), "Revision 22 preset was rejected after retiring its framing key");
+        const auto saved = RoundTrip(s);
+        Require(!saved["general"]["target_lock_vertical_framing"] && s.tlSheathed.pitchOffset == tilt,
+            "Retired framing setting survived or rewrote the authored pitch");
+    }
+    s.ResetAllToVanilla();
 
     AuthorFixture(s);
     const auto authored = Snapshot(s);

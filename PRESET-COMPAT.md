@@ -56,11 +56,38 @@ Form bindings use plugin name plus local form ID; never persist load-order IDs.
 
 ## Format versions
 
+Format 17 adds optional `general.disable_death_camera` and
+`general.disable_ragdoll_camera`. Both default false and are saved only when
+enabled. Existing death/ragdoll camera tuning is retained even while hidden; Slow Motion
+remains available independently of camera suppression.
+Formats 1–16 retain their previous camera behavior; older readers reject format
+17 rather than silently discarding either preference.
+
+Format 16 adds optional `general.dialogue_dbvo_camera_switching`. The default
+is true, preserving the existing DBVO 2 reverse shot for older presets. False
+keeps the camera on the NPC during player choices and voice playback. The key
+is saved only when disabled. Formats 1–15 continue to load; older readers reject
+format 16 rather than silently losing this preference.
+
+Format 15 adds optional `[cinematic.combat_fov]` with `enabled` (false), `fov`
+(80 degrees, range 50–140) and `transition_speed` (1, range 0.05–10). It changes
+the world FOV during combat and eases back to the currently resolved profile
+on exit. Disabled-but-authored tuning survives round trips. Formats 1–14 still
+load with the effect off; existing camera profiles and defaults are unchanged.
+Older readers reject format 15 rather than silently discarding the new tuning.
+
 Cinematic Views is deferred and has no active menu or runtime in the current
 build. Its format-12/13 data reader and writer remain solely to preserve existing
 definitions when presets are loaded or saved. View profiles are excluded from
 active profile enumeration. The view behavior described below documents the
-deferred implementation; the current writer stays at format 13.
+deferred implementation; the current writer uses format 17.
+
+Format 14 introduced the unreleased native experiment
+`general.target_lock_vertical_framing`. Revision 23 retires that key: the reader
+ignores it, the writer omits it, and no value is migrated into profile pitch.
+Keep accepting format 14 so presets saved by the development build still load.
+Configured target-point bones use TDM's separate TOML format; they are not
+camera-preset values and do not change any profile's additive `pitch_offset`.
 
 Format 13 adds optional `trigger_point = [x, y, z]` to each cinematic view.
 New views capture the player's position when the picker scans. Radius measures

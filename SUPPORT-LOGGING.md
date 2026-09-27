@@ -1,13 +1,16 @@
 # Logs and startup reports - 1.2.0
 
-For a startup error, ask the user for the **complete `DietDrCamera.log`,
+OmniCam 1.3.0 writes OmniCam.log. Earlier Diet Dr Camera builds wrote
+DietDrCamera.log; keep the log matching the build being reported.
+
+For a startup error, ask the user for the **complete `OmniCam.log`,
 `skse64.log`, and the full error message** from the same launch. A source
 filename and line number alone do not identify which hook failed. Verbose
 Logging is not required for startup diagnostics.
 
 Suggested reply:
 
-> Please reproduce the problem once, then attach DietDrCamera.log and
+> Please reproduce the problem once, then attach OmniCam.log and
 > skse64.log along with the full error message. Include a Crash Logger report
 > if the game crashes. Tell us whether it happens before the main menu, while
 > loading a save, or during play, and what you were doing when it happened.
@@ -20,14 +23,14 @@ Use Windows' Documents folder, including its redirected/OneDrive location:
 - Steam: `Documents\My Games\Skyrim Special Edition\SKSE\`
 - GOG: `Documents\My Games\Skyrim Special Edition GOG\SKSE\`
 
-The current file is `DietDrCamera.log`. Version 1.2.0 keeps three previous
-sessions as `DietDrCamera.1.log`, `.2.log`, and `.3.log`, newest first. Copy the
+The current file is `OmniCam.log`. Version 1.2.0 keeps three previous
+sessions as `OmniCam.1.log`, `.2.log`, and `.3.log`, newest first. Copy the
 files soon after reproducing the issue; `skse64.log` has its own retention
 policy. If the user has restarted, collect the DDC log from the failed launch
 and any retained matching SKSE/Crash Logger output.
 
 If the normal log directory cannot be used, DDC attempts
-`%TEMP%\DietDrCamera\DietDrCamera.log`. DDC's hook-validation error includes
+`%TEMP%\DietDrCamera\OmniCam.log`. DDC's hook-validation error includes
 the actual DDC log path. If neither destination works, DDC reports the logging
 failure and does not initialize. Failure before SKSE calls DDC's load entry
 point cannot produce a new DDC log; use `skse64.log` and the loader error then.

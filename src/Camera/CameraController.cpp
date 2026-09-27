@@ -7,6 +7,7 @@
 #include "Camera/StateResolver.h"
 #include "Camera/TargetLockBias.h"
 #include "Camera/CombatFramingController.h"
+#include "Camera/CombatFOVController.h"
 #include "Core/Spring.h"
 #include "Dialogue/DialogueLookPicker.h"
 #include "Hooks/HookManager.h"
@@ -445,8 +446,11 @@ namespace DietDrCamera
     void CameraController::ResetTransitionState()
     {
         CombatFramingController::Reset();
+        CombatFOVController::Reset();
         lockProximityBias = {};
         m_vanityTransition.Reset();
+        m_dlgReverseBlend = m_dlgReverseVelocity = 0.0f;
+        m_dlgSideExit.Reset();
         InvalidateProfileReferences();
         lastSelectedProfile = nullptr;
         zoomBaseInitialized = false;
@@ -630,6 +634,7 @@ namespace DietDrCamera
         // frame we reach the 3p dialogue branch after the previous frame was 1p.
         const bool wasFirstLastFrame = m_prevFramePovFirst;
         m_prevFramePovFirst          = a_camera->IsInFirstPerson();
+        if (m_prevFramePovFirst) m_dlgSideExit.Reset();
         // ----- COVER THE ENGINE'S TRANSITION ------------------------------
         //
         // Vanilla runs a real camera transition on dismount (kMount ->
@@ -2262,6 +2267,8 @@ namespace DietDrCamera
             // this it would still be holding whatever the last one ended on
             // and the new one would open with the camera already swung round.
             m_dlgReverseBlend     = 0.0f;
+            m_dlgReverseVelocity  = 0.0f;
+            m_dlgSideExit.Reset();
         }
         if (!dialogueActiveForProfile) {
             m_dialogueEntryLockstepActive = false;
@@ -3953,7 +3960,9 @@ namespace DietDrCamera
             (currentState == thirdPerson || currentState == mounted));
         float effectiveHeight = currentProfile.height + lockProximityBias.value.height;
         float effectiveZoom   = currentProfile.zoom + lockProximityBias.value.zoom + crowd.zoom;
-        float effectiveFOV    = currentProfile.fov + lockProximityBias.value.fov + crowd.fov;
+        const float combatBaseFOV = CombatFOVController::Apply(currentProfile.fov,
+            currentState == thirdPerson || currentState == mounted);
+        float effectiveFOV    = combatBaseFOV + lockProximityBias.value.fov + crowd.fov;
         float effectiveRot    = currentProfile.rotation;
         float effectivePitch  = currentProfile.pitchOffset + lockProximityBias.value.pitch * 100.0f;
 
@@ -4017,6 +4026,8 @@ namespace DietDrCamera
         bool wroteDialogueY = false;
 
         if (menuBlocking) {
+            // A menu camera/new dialogue owns its own framing.
+            m_dlgSideExit.Reset();
             auto* ui = RE::UI::GetSingleton();
             if (ui && ui->IsMenuOpen("Dialogue Menu") && settings.dialogueEnabled && dialogueActiveForProfile) {
                 constexpr float kGameUnitsPerSliderUnit = Defaults::GameUnitsPerSliderZoom;
@@ -4184,11 +4195,8 @@ namespace DietDrCamera
                         const float blendSecs = (std::max)(kMinReverseSweep,
                             SettingsManager::DialogueBlendDuration(
                                 (std::max)(0.05f, settings.dialogueMulPosition)));
-                        const float tau   = (std::max)(0.05f, blendSecs / 3.0f);
-                        const float alpha = 1.0f - std::exp(-dt / tau);
-                        m_dlgReverseBlend += ((wantReverse ? 1.0f : 0.0f) - m_dlgReverseBlend) * alpha;
-                        if (!wantReverse && m_dlgReverseBlend < 0.0005f) m_dlgReverseBlend = 0.0f;
-                        if ( wantReverse && m_dlgReverseBlend > 0.9995f) m_dlgReverseBlend = 1.0f;
+                        StepDialogueReverse(m_dlgReverseBlend, m_dlgReverseVelocity,
+                            wantReverse, blendSecs, dt);
                     }
 
                     auto* spk = DialogueLookPicker::GetActiveSpeakerRef();
@@ -4664,6 +4672,10 @@ namespace DietDrCamera
         // Restore the engine's intended y so the camera animates back to
         // its natural pose instead of holding the dialogue zoom forever.
         if (sLastWroteDialogueY) {
+            // X includes the reverse-shot anchor, which is absent from mSide.
+            // Preserve the rendered offset before the gameplay write below.
+            m_dlgSideExit.Capture(tps->posOffsetExpected.x, tps->posOffsetActual.x,
+                effectiveSide, kDialogueEntryLockstepDuration);
             const float exitEngineYBefore       = tps->posOffsetExpected.y;
             const float exitActualYBefore       = tps->posOffsetActual.y;
             const float exitCurZoomBefore       = tps->currentZoomOffset;
@@ -4744,8 +4756,10 @@ namespace DietDrCamera
         // to feel responsive on profile transitions. Writing both fields
         // each frame neuters the engine's lerp; our own Layer-2 EMA
         // (chaseEMA above) provides the smoothing.
-        tps->posOffsetActual.x   = effectiveSide;
-        tps->posOffsetExpected.x = effectiveSide;
+        const auto exitSide = m_dlgSideExit.Step(effectiveSide,
+            dt * std::clamp(settings.dlgPaceMul, 0.2f, 1.0f));
+        tps->posOffsetActual.x   = exitSide.actual;
+        tps->posOffsetExpected.x = exitSide.expected;
         tps->posOffsetActual.z   = effectiveHeight;
         tps->posOffsetExpected.z = effectiveHeight;
 

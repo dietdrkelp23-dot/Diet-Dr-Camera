@@ -42,7 +42,7 @@ namespace DietDrCamera::DialogueLookPicker
     void OnNpcLineChanged();
 
     // Per-frame driver for the time-based behaviour: the auto-switch
-    // interval. Self-gates on the Dialogue Menu being open; cheap no-op
+    // interval and DBVO 2 voice tracking. Self-gates on the Dialogue Menu being open; cheap no-op
     // otherwise. a_dt is real seconds.
     void Tick(float a_dt);
 
@@ -53,16 +53,12 @@ namespace DietDrCamera::DialogueLookPicker
     // choosing what to say.
     [[nodiscard]] bool IsNpcDeliveringLine();
 
-    // True while the PLAYER's own voice line is playing. Only ever true with
-    // a player-voice mod installed — vanilla never gives the player a voiced
-    // line — and detected from the engine's own subtitle/voice state rather
-    // than from any particular mod's signals, so it works with whichever one
-    // is installed and costs nothing when none is.
+    // DBVO 2 native player-dialogue playback (including queued startup).
     [[nodiscard]] bool IsPlayerVoiceLinePlaying();
 
-    // True when the dialogue camera should be aimed at the PLAYER's face
-    // rather than the speaker's: the "Look At The Player" toggle is on, we're
-    // in third person, and it's the player's half of the conversation.
+    // Optional DBVO 2 reverse shot: third person only, while choosing a
+    // response or while the player's dialogue sound is still active.
+    // Disabled by the Dialogue settings camera-switching toggle.
     [[nodiscard]] bool ShouldLookAtPlayer();
 
     // The active dialogue partner as a plain reference. NOT an Actor: the

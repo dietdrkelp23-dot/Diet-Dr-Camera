@@ -1,45 +1,61 @@
-DIET DR CAMERA 1.2.0 - NEXUS UPDATE DIRECTIONS
+OMNICAM 1.3.0 - NEXUS UPDATE DIRECTIONS
 
-1. OPEN THE EXISTING MOD PAGE
+1. EXISTING MOD PAGE
 
 https://www.nexusmods.com/skyrimspecialedition/mods/191847
-Add the update to this page's Files section. These are prepared local files;
-no upload, support message or GitHub publication has been performed.
+Use the existing page so presets, endorsements and discussion remain together.
+These are prepared local files; preparing them does not publish the update.
 
 2. MAIN FILE
 
-File: Desktop/Diet Dr Camera - Mod/Diet Dr Camera.zip
-Display name: Diet Dr Camera
-Version: 1.2.0
+File: OmniCam-1.3.0.zip
+Display name: OmniCam
+Version: 1.3.0
 Category: Main files
-Description: Adds improved startup logging for compatibility reports, expanded
-Damage Reaction and projectile flyby noise, Crowd Modifier, Target Lock biases,
-and independent first-/third-person projectile tracing. Existing presets remain
-readable. Requires matching SKSE64, Address Library and SKSE Menu Framework 3.
+Description: Renames the mod to OmniCam and adds Combat FOV, optional DBVO 2
+camera switching, and per-slider Apply across tabs or matching Indoor/Outdoor
+profiles, including existing weapon and animation entries. Includes live Combat
+FOV editing, death/ragdoll camera disable toggles that retain camera control and
+optional slow motion, cleaner popups and improved controller navigation. Fixes
+persistent sunlight-triggered shaking, rapid Whirlwind Sprint noise jerks,
+cosmetic blood noise and startup issues.
+Existing presets keep their values. Requires matching SKSE64, Address Library
+and SKSE Menu Framework 3. DBVO 2 is optional.
 Enable mod-manager downloads. Upload the ZIP itself, not its containing folder.
 
 3. MATCHING SOURCE
 
-File: Desktop/Diet Dr Camera - Source/Diet Dr Camera - Source.zip
-Display name: Diet Dr Camera - Source
-Version: 1.2.0
+File: OmniCam - Source-1.3.0.zip
+Display name: OmniCam - Source
+Version: 1.3.0
 Category: Miscellaneous files
-Description: Full corresponding 1.2.0 source, bundled dependencies, pinned
+Description: Full corresponding 1.3.0 source, bundled dependency sources, pinned
 recipes, tests, licenses, build instructions and startup support guide. For
 developers; not required for playing or installation through MO2/Vortex.
 Use manual download only if available. Publish alongside the main file.
+Both ZIPs must come from the same verified release candidate.
 
-4. PAGE TEXT
+4. PAGE TEXT AND THUMBNAIL
 
-Set the page version to 1.2.0. Use CHANGELOG-1.2.0.txt for the changelog and
-Description - Nexus BBCode.txt for the updated feature/support description.
+Rename the page to OmniCam - Customizable Camera Overhaul and set version 1.3.0.
+Use CHANGELOG-1.3.0.txt for the version changelog and
+Description - Nexus BBCode.txt for the feature/support description.
+Requirements - Nexus BBCode.txt supplies the requirements text.
 LOGS AND SUPPORT.txt is ready for a pinned compatibility-report post.
-Keep existing requirements, credits, permissions and screenshots. The matching
-source ZIP includes BUILDING.md; do not advertise an unpublished v1.2.0 GitHub tag.
+Use OmniCam Thumbnail.png from the release folder for the page thumbnail:
+white OmniCam lettering and an infinity symbol on black.
+Keep existing gameplay screenshots, credits and permissions.
 
-Keep the runtime claims qualified: offline hook checks do not prove gameplay
-compatibility, and GOG executable testing remains incomplete. The new logging
-helps investigate reports; it does not establish that every version is fixed.
+The two ZIPs belong in Files. The PNG is page artwork, not an installable mod.
+Keep private symbols, manifests, test logs, personal settings and game fixtures
+with the local release records. The source ZIP includes BUILDING.md; do not
+advertise an unpublished v1.3.0 GitHub tag.
 
-Only the two prepared ZIPs are upload payloads. Keep private symbols, manifests,
-test logs, personal settings and game fixtures with the local release records.
+Existing presets need no reset, rename or folder migration. Newly saved presets
+use format 17; older mod builds cannot read that newer format.
+
+Keep runtime claims qualified: offline hook checks do not prove gameplay
+compatibility, and GOG executable testing remains incomplete. Consult
+RELEASE-CHECKLIST.md for the recorded manual testing and remaining smoke checks.
+Automatic startup diagnostics remain available; temporary cosmetic-projectile
+test logging is removed.

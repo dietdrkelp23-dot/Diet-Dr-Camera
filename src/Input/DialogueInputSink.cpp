@@ -4,6 +4,7 @@
 
 #include "Dialogue/DialogueLookPicker.h"
 #include "Hooks/HookManager.h"
+#include "Camera/BleedoutCameraOverride.h"
 #include "Settings/PresetManager.h"
 #include "Settings/SettingsManager.h"
 #include "UI/MenuUI.h"
@@ -119,36 +120,18 @@ namespace DietDrCamera
                 continue;
             }
 
-            // Death camera skip — fires only while BleedoutCameraState
-            // is the active camera state (player is dying / bleeding
-            // out) AND no menu is open. Triggers immediate reload of
-            // the most recent save so the user skips the rest of the
-            // Hold Duration wait. The menu gate prevents the hotkey
-            // from firing if the user opens ESC / inventory / etc.
-            // during bleedout — without it the menu can't be used as
-            // an "abort" since the key still triggers underneath.
-            // Bleedout hotkey. The SAME physical key can be bound to both the
-            // death-cam skip and the ragdoll slow-mo fade; we dispatch by context
-            // (the engine routes both real death and ragdoll through kBleedout):
-            //   real death + skip key   -> reload the most recent save
-            //   ragdoll    + fade key   -> ease the ragdoll slow-mo out early
+            // Death skip and slow-motion fade follow the player event, including
+            // a stationary view with the native death/ragdoll camera disabled.
+            // Shared keys dispatch by death vs recoverable knockdown.
             const bool isDeathSkipKey   = (s.deathCameraSkipKey != 0 && encoded == s.deathCameraSkipKey);
             const bool isDeathFadeKey   = (s.deathCamFadeKey    != 0 && encoded == s.deathCamFadeKey);
             const bool isRagdollFadeKey = (s.ragdollCamFadeKey  != 0 && encoded == s.ragdollCamFadeKey);
             if (isDeathSkipKey || isDeathFadeKey || isRagdollFadeKey) {
                 auto* uiMenu = RE::UI::GetSingleton();
                 if (uiMenu && uiMenu->GameIsPaused()) continue;
-                auto* pc = RE::PlayerCamera::GetSingleton();
-                const bool inBleedout = pc && pc->currentState &&
-                                        pc->currentState->id == RE::CameraState::kBleedout;
-                if (inBleedout) {
-                    bool realDeath = true;
-                    if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-                        realDeath = player->IsDead();
-                        if (!realDeath)
-                            if (auto* avo = player->AsActorValueOwner())
-                                realDeath = avo->GetActorValue(RE::ActorValue::kHealth) <= 0.0f;
-                    }
+                const bool realDeath = BleedoutCameraOverride::IsEventActive(true);
+                const bool ragdoll = BleedoutCameraOverride::IsEventActive(false);
+                if (realDeath || ragdoll) {
                     if (realDeath && isDeathSkipKey) {
                         if (auto* slm = RE::BGSSaveLoadManager::GetSingleton()) {
                             // LoadMostRecentSaveGame needs the main thread; SKSE's
@@ -167,7 +150,7 @@ namespace DietDrCamera
                         // (user request 2026-08-15).
                         HookManager::RequestRagdollSlowmoFade();
                         spdlog::info("DeathCam: slow-mo fade requested");
-                    } else if (!realDeath && isRagdollFadeKey) {
+                    } else if (ragdoll && isRagdollFadeKey) {
                         HookManager::RequestRagdollSlowmoFade();
                         spdlog::info("RagdollCam: slow-mo fade requested");
                     }

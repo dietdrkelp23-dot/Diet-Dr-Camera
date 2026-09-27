@@ -1,4 +1,5 @@
 #pragma once
+#include "UI/CrosshairOwnership.h"
 
 #include <atomic>
 #include <cstdint>
@@ -57,7 +58,7 @@ namespace DietDrCamera
         // (Better Third Person Selection) must not touch crosshair visibility
         // while this is set, or the two fight over it.
         [[nodiscard]] bool IsOverridingCrosshair() const {
-            return crosshairOverrideActive_.load(std::memory_order_acquire);
+            return crosshairOwnership_.IsOverriding();
         }
 
     private:
@@ -101,6 +102,7 @@ namespace DietDrCamera
         bool    PredictArrowImpact(double& outScreenX, double& outScreenY,
                                    float& outDist);
         void    SetVisibility(bool visible);
+        void    SetDisplayVisibility(bool visible);
         bool    ResolveCameraNi(RE::NiCamera*& outNiCam) const;
         bool    SmoothCamOwnsCrosshair();
 
@@ -441,7 +443,7 @@ namespace DietDrCamera
         // reset before the frame ships. Saved under poseMutex_;
         // active gate is the atomic so the HudElement fast path can
         // bail without taking the lock.
-        std::atomic<bool>      crosshairOverrideActive_{false};
+        CrosshairOwnership    crosshairOwnership_;
         mutable std::mutex     poseMutex_;
         double                 echoSx_     = 0.0;
         double                 echoSy_     = 0.0;

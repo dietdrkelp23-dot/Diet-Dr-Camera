@@ -26,6 +26,7 @@ namespace DietDrCamera::CreatureMagic
         e.hostile = base->IsHostile(); e.detrimental = base->IsDetrimental();
         if (const auto* projectile = base->data.projectileBase) {
             e.missile = projectile->IsMissile();
+            e.beam = projectile->IsBeam();
             e.continuous = projectile->IsCone() || projectile->IsFlamethrower() || projectile->IsBarrier() ||
                 projectile->data.flags.any(RE::BGSProjectileData::BGSProjectileFlags::kContinuousUpdate);
         }

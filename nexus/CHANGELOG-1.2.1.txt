@@ -1,0 +1,51 @@
+Superseded candidate notes. See CHANGELOG-1.3.0.txt for the current update.
+
+Diet Dr Camera 1.2.1
+
+Returns to the released 1.2.0 camera and external True Directional Movement
+integration while retaining the later bug fixes. The native movement, jumping,
+targeting, melee-contact and comparison-recorder experiments are removed.
+
+- Exclude Dismembering Framework blood spray and its invisible surface traces
+  from NPC magic flyby noise, preventing cosmetic blood from shaking the camera.
+- Prevent already-passed or impacted projectiles from retriggering flyby noise
+  after observation gaps, camera stalls, POV changes or listener teleports.
+- Controller and arrow navigation follows the visible layout: nearby controls
+  and panels in the pressed direction determine the destination. Tabs and
+  environment toggles no longer force focus into an unrelated entry list.
+- Improve controller and arrow navigation between short entry lists and lower
+  editor controls throughout the menu. Returning from a list preserves the
+  previous slider row. Tab hints now distinguish Paste Entry to All from
+  Paste Entire Tab according to what was copied.
+- Paste a copied entry onto a tab to apply it to every compatible entry in
+  that tab, including Outdoor and Indoor settings. Use the existing Paste
+  binding over the tab header, or right-click and choose Paste Entry to All.
+- Add automatic DBVO 2 support to third-person dialogue: frame the player's
+  head while choosing a response and keep that shot through native voice
+  playback, including delayed or skipped lines. Speaker turns accelerate
+  smoothly and preserve the sideways framing while leaving the player shot.
+  Existing preset values remain.
+- Prevent a quick R3 tap from starting a native camera zoom. First-to-third
+  and third-to-first now share the same 0.2-second hold requirement and switch
+  on release; TDM target-lock input keeps its existing handling.
+- Set the oldest supported Skyrim SE runtime to 1.5.97. Earlier SE patches are
+  outside support following the Menu Framework startup failure on 1.5.73.
+- Fix startup validation when CBPC installs an inline function-entry detour.
+- Preserve native return values from arrow, missile, cone and beam impact callbacks.
+- Revalidate complete call sites before installing hooks; retain DDC camera hook chaining.
+- Respect foreign collision patches and reject out-of-range collision diversions.
+- Restore shock damage reactions using the actual affected actor values and
+  retain accepted, collision-bounded shock-beam near-miss effects.
+- Silence the camera ambience during recoverable ragdolls.
+- Keep target-lock acquisition/release timing consistent across frame rates and
+  measure target switches from the remaining visible swing.
+- Restore crosshair transforms only after tracing owned them, and release target-lock
+  visibility even when projectile tracing is disabled.
+- Continue reading format-14 development presets, preserving authored camera
+  values while ignoring the retired native vertical-framing field.
+- Keep automated build, packaging and symbol checks in the background.
+
+Existing 1.2.0 features and settings remain. Target-lock controls use external
+TDM again. Automated validation and remaining gameplay coverage are recorded
+in RELEASE-CHECKLIST.md.
+

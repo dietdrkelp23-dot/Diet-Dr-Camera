@@ -34,6 +34,28 @@ hashes, extracted race/weapon/attack records, UESP reference pages, frost
 atronach/centurion attack names, test/build logs and deployment records.
 The record scanner does not load or modify the game, saves or installed plugins.
 
+## First-person shock follow-up (September 21, 2026)
+
+Native value-effect callbacks can pass `ActorValue::kNone`, requesting the
+effect's stored actor value. The incoming observer now resolves that sentinel
+and DualValueModifierEffect's primary/weighted secondary applications before
+deciding whether health damage occurred. This repairs missing shock callbacks
+without treating magicka/stamina loss, utility modifiers or restoration as hits.
+
+Finite lightning beams now supply their actual origin-to-contact segment to NPC
+magic near-miss tracking, after native BeamProjectile::AddImpact accepts it.
+The callback preserves the native returned ImpactData pointer, copies data before
+the original call, and does not extend a beam beyond its reported collision.
+Player contacts suppress near-miss noise. Spell-hit and health-effect receipts
+deduplicate discrete shock impacts; concentration/continuous effects retain the
+existing smooth damage stream. Both POVs share these paths.
+
+Native SE 1.5.97 and AE 1.6.1170 disassembly is preserved under
+`build/diagnostics/shock-*-runtime.txt`. The beam vtable target is checked by the
+runtime image harness. New checks cover AV resolution, finite beams, wall stops,
+direct contacts, continuous exclusions, deduplication and POV handoffs. These
+checks do not establish the in-game strength of the resulting effect.
+
 ## Projectile, effect and nearby-noise audit
 
 Incoming reactions require contact with the player. Nearby attack noise belongs
@@ -185,3 +207,23 @@ come from [Lurker](https://en.uesp.net/wiki/Skyrim:Lurker),
   which change health without a supported hit/effect notification remain a
   runtime limitation. No live encounter, GOG/runtime-version matrix or arbitrary
   third-party animation pack is claimed verified by these checks.
+
+## Vampire sunlight follow-up (September 27, 2026)
+
+The desktop capture `2026-09-27 11-02-29.mp4` shows a Vampire Lord
+transformation around 2:14 and persistent shaking afterward. The session log
+records the transformation at 11:04:43.216, followed by repeated discrete magic
+reactions from `FE3C2D62`. The SKSE load map resolves that form to
+`SunAffectsNPCVampires.esp:000D62` (`_SunDamage`). Installed record inspection
+identifies a constant self-delivered ability with zero-duration health-drain
+effects. `Dawnguard.esm:012D15`, overridden by Scion as
+`MAG_VampireWeaknessSunLord`, also generated a reaction on application.
+
+The value observer now rejects passive abilities, diseases, addictions and
+self-applied effects before enqueuing reactions. Self-hit events are ignored as
+well. The filter uses source metadata, not plugin names or load-order IDs.
+Enemy attacks, poison streams and source-less hazards remain eligible; no
+gameplay damage is modified. Regression coverage replays continuous passive
+callbacks alongside a centurion impact in both views and checks that the
+reaction settles. Capture frames, logs and exact installed record hashes are
+under `build/diagnostics/vampire-noise-20260927`.

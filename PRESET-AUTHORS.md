@@ -1,4 +1,7 @@
-# Sharing Diet Dr Camera presets
+# Sharing OmniCam presets
+
+Use **OmniCam - Your Preset Name** for new preset listings. Existing Diet Dr
+Camera presets remain compatible; files stay in the same preset directory.
 
 Create and save presets from the 1.0 release or later. Development presets are
 outside the public compatibility contract.
@@ -26,7 +29,14 @@ New features must preserve the behavior of earlier public presets. A build that
 cannot read a newer preset format refuses to load or overwrite it. Do not edit
 `[meta].format` to bypass that check.
 
-Diet Dr Camera 1.0 writes format 7, with optional player Hit Shake's
+OmniCam 1.3.0 writes format 17 and reads earlier formats. The new fields store
+optional Combat FOV, DBVO 2 camera switching, and the death/ragdoll camera
+toggles. Existing presets
+retain their values and defaults. Presets newly saved by 1.3.0 require a reader
+that supports format 17; keep an older backup if you need to return to an older
+mod version.
+
+The original 1.0 release writes format 7, with optional player Hit Shake's
 Strength, Speed, Bounce and Texture in attack noise profiles. Strength defaults
 to zero. Its tuning follows attack, weapon, POV and location entries. Format-6
 Feel/Recovery tuning converts to similar first-kick strength, timing and rebound;
@@ -36,7 +46,7 @@ Projectile spell/staff hits use the same fields in Fire & Forget/Ritual entries,
 including spell hand overrides and specific bindings (spell Casting; staff
 Unsheathed/Sneaking). These controls affect direct missile actor contacts only;
 concentration, lingering damage and splash-only hits do not trigger them.
-Old presets gain no enabled magic Hit Shake, and the format remains 7.
+Old presets gain no enabled magic Hit Shake; that 1.0 behavior used format 7.
 Projectile impacts apply automatic distance falloff and a stronger first-person
 gain at runtime. These do not rewrite the four saved controls or add preset keys.
 Independent NPC Magic, Shouts, Melee, Archery and Transformations amounts remain

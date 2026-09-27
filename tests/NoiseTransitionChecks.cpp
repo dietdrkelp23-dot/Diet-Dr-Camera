@@ -206,12 +206,100 @@ static void CheckQuickTuneAndSilence(bool mainMenu)
         "Fade to silence failed to settle and retire its layers");
 }
 
+static void CheckChainedShoutRestart()
+{
+    double worstOldJump = 0.0, worstNewJump = 0.0;
+    // The same enabled Whirlwind Sprint profile remains selected throughout a
+    // chain. Only the envelope falls from the previous word tier to the next
+    // windup: the old profile-signature guard therefore never armed a fade.
+    for (float previousEnvelope : {0.70f, 1.20f, 2.40f, 3.70f}) {
+        for (float phase : {0.0f, 0.2f, 0.65f, 1.0f}) {
+            Blend original;
+            original.Change({615.41, 5.0f * previousEnvelope, 2.0f * previousEnvelope, 1.0f, 0.0f}, 1.0f);
+            original.Tick(phase, phase);
+            const double before = original.Value(false);
+            auto incoming = original.current;
+            incoming.amplitude = 5.0f;  // unchanged profile, fresh 1.0x windup
+            incoming.speed = 2.0f;
+
+            auto legacy = original;
+            legacy.current = incoming;
+            worstOldJump = std::max(worstOldJump, std::abs(legacy.Value(false) - before));
+
+            ShoutNoiseRestart restart;
+            Require(!restart.Observe(true, 100), "First shout was treated as a restart");
+            Require(!restart.Observe(true, 100), "Held shout repeatedly armed a fade");
+            auto restarted = original;
+            if (restart.Observe(true, 200)) {
+                incoming.clock += 611.7;
+                restarted.Change(incoming, 1.0f);
+            } else {
+                restarted.current = incoming;
+            }
+            const double jump = std::abs(restarted.Value(false) - before);
+            worstNewJump = std::max(worstNewJump, jump);
+            Require(jump < 1e-6, "Chained shout cut its live noise signal when windup restarted");
+            Require(!restart.Observe(true, 200), "Charge/release polling retriggered the same cast");
+            for (float h : {0.001f, 0.002f, 0.004f}) {
+                auto continued = original;
+                auto changed = restarted;
+                continued.Tick(h, h);
+                changed.Tick(h, h);
+                const double derivativeError = std::abs(changed.Value(false) - continued.Value(false)) / h;
+                Require(derivativeError < 150.0 * h, "Chained shout introduced a first-order noise velocity cut");
+            }
+        }
+    }
+    Require(worstOldJump > 0.1, "Fixture did not reproduce the unblended shout restart");
+    std::cout << "3p chained-shout sample discontinuity: old=" << worstOldJump
+              << ", retained=" << worstNewJump << '\n';
+
+    ShoutNoiseRestart edges;
+    Require(!edges.Observe(false, 0), "Idle armed a shout fade");
+    Require(!edges.Observe(true, 0), "Missing cast identity armed a fade");
+    Require(!edges.Observe(true, 100), "First valid cast after missing identity was a restart");
+    for (int i = 0; i < 120; ++i)
+        Require(!edges.Observe(true, 100), "Paused/repeated observation restarted the shout");
+    Require(!edges.Observe(false, 100), "Shout exit was classified as a restart");
+    Require(!edges.Observe(true, 200), "A separated shout was treated as an overlapping cast");
+    Require(edges.Observe(true, 300), "A fresh overlapping cast was not detected");
+
+    for (int fps : {30, 60, 120, 144, 240}) {
+        Blend chain;
+        ShoutNoiseRestart restart;
+        std::uint64_t cast = 100;
+        restart.Observe(true, cast);
+        const float dt = 1.0f / fps;
+        const int interval = std::max(1, fps / 5); // deliberately faster than a full charge
+        double maximumJump = 0.0;
+        for (int frame = 0; frame < fps * 10; ++frame) {
+            const bool fresh = frame % interval == 0;
+            if (fresh) ++cast;
+            const double before = chain.Value(false);
+            if (restart.Observe(true, cast)) {
+                chain.Change({chain.current.clock + 611.7, 5.0f, 2.0f, 1.0f, 0.0f}, 1.0f);
+                maximumJump = std::max(maximumJump, std::abs(chain.Value(false) - before));
+                Require(std::abs(chain.Value(false) - before) < 1e-6, "Rapid chain discarded a still-visible shout tail");
+            }
+            chain.Tick(dt, dt);
+            Require(chain.outgoing.Size() <= 7, "Chained shout history failed to retire");
+        }
+        restart.Observe(false, cast);
+        chain.Change({0, 0, 1, 1, 0}, 1.0f);
+        chain.Tick(1.01f, 1.01f);
+        Require(chain.Value(false) == 0.0 && chain.outgoing.Size() == 0,
+            "Completed shout chain kept stale noise running");
+        std::cout << fps << " Hz shout chain: max handoff jump=" << maximumJump << '\n';
+    }
+}
+
 int main()
 {
     try {
         CheckInterruptedSignal(false);
         CheckInterruptedSignal(true);
         CheckOrdinaryFadeAndCompositionOrder();
+        CheckChainedShoutRestart();
         CheckChainsAndEnergy();
         CheckQuickTuneAndSilence(false);
         CheckQuickTuneAndSilence(true);

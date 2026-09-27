@@ -62,10 +62,10 @@ namespace DietDrCamera::Diagnostics
             IMAGE_NT_HEADERS64 nt{};
             if (!Read(base, dos) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
                 !Read(base + dos.e_lfanew, nt) || nt.Signature != IMAGE_NT_SIGNATURE) {
-                spdlog::warn("[Diagnostics] DDC build identity unavailable");
+                spdlog::warn("[Diagnostics] OmniCam build identity unavailable");
                 return;
             }
-            spdlog::info("[Environment] DDC PE timestamp=0x{:08X}, image bytes={}",
+            spdlog::info("[Environment] OmniCam PE timestamp=0x{:08X}, image bytes={}",
                 nt.FileHeader.TimeDateStamp, nt.OptionalHeader.SizeOfImage);
             const auto debug = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
             if (debug.VirtualAddress >= nt.OptionalHeader.SizeOfImage ||
@@ -79,12 +79,12 @@ namespace DietDrCamera::Diagnostics
                     sizeof(cv) > nt.OptionalHeader.SizeOfImage - entry.AddressOfRawData ||
                     !Read(base + entry.AddressOfRawData, cv) || cv.signature != 0x53445352) continue;
                 const auto& g = cv.guid;
-                spdlog::info("[Environment] DDC PDB identity={:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}, age={}",
+                spdlog::info("[Environment] OmniCam PDB identity={:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}, age={}",
                     g.Data1, g.Data2, g.Data3, g.Data4[0], g.Data4[1], g.Data4[2], g.Data4[3],
                     g.Data4[4], g.Data4[5], g.Data4[6], g.Data4[7], cv.age);
                 return;
             }
-            spdlog::warn("[Diagnostics] DDC PDB identity unavailable");
+            spdlog::warn("[Diagnostics] OmniCam PDB identity unavailable");
         }
 
         void LogAddressLibrary(REL::Version runtime)
@@ -116,19 +116,19 @@ namespace DietDrCamera::Diagnostics
 
     void StartSession(const std::filesystem::path& directory)
     {
-        const auto path = directory / "DietDrCamera.log";
+        const auto path = directory / "OmniCam.log";
         // Rotate only at launch: preserve the startup header throughout even a
         // long verbose session. Ordinary per-frame output remains debug-only.
         auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
             path.string(), std::numeric_limits<std::size_t>::max(), 3, true);
-        auto logger = std::make_shared<spdlog::logger>("DietDrCamera", std::move(sink));
+        auto logger = std::make_shared<spdlog::logger>("OmniCam", std::move(sink));
         logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [thread %t] %v");
         logger->set_level(spdlog::level::info);
         logger->flush_on(spdlog::level::info);
         logPath = path;
         spdlog::set_default_logger(std::move(logger));
-        spdlog::info("[Session] Diet Dr Camera v" DDC_VERSION_STRING " | process {} | new session", GetCurrentProcessId());
-        spdlog::info("[Session] Log: {} | previous sessions: DietDrCamera.1.log through DietDrCamera.3.log", LogLocation());
+        spdlog::info("[Session] OmniCam v" DDC_VERSION_STRING " | process {} | new session", GetCurrentProcessId());
+        spdlog::info("[Session] Log: {} | previous sessions: OmniCam.1.log through OmniCam.3.log", LogLocation());
         spdlog::info("[Support] For startup problems send this complete log, skse64.log, and the full error message. Include a Crash Logger report for a crash. Verbose Logging is not needed for startup diagnostics.");
     }
 
@@ -142,19 +142,19 @@ namespace DietDrCamera::Diagnostics
             return true;
         } catch (const std::exception& error) { reason = error.what(); }
         try {
-            StartSession(std::filesystem::temp_directory_path() / "DietDrCamera");
+            StartSession(std::filesystem::temp_directory_path() / "OmniCam");
             spdlog::warn("[Session] Using a temporary log because the SKSE log directory failed: {}", reason);
             return true;
         } catch (const std::exception& error) {
-            const auto message = fmt::format("Diet Dr Camera could not create its diagnostic log.\nSKSE log: {}\nTemporary log: {}\nThe plugin was not initialized.", reason, error.what());
-            MessageBoxA(nullptr, message.c_str(), "Diet Dr Camera - logging unavailable", MB_OK | MB_ICONERROR);
+            const auto message = fmt::format("OmniCam could not create its diagnostic log.\nSKSE log: {}\nTemporary log: {}\nThe plugin was not initialized.", reason, error.what());
+            MessageBoxA(nullptr, message.c_str(), "OmniCam - logging unavailable", MB_OK | MB_ICONERROR);
             return false;
         }
     }
 
     std::string LogLocation()
     {
-        return logPath.empty() ? "DietDrCamera.log in the SKSE log directory" : Utf8(logPath);
+        return logPath.empty() ? "OmniCam.log in the SKSE log directory" : Utf8(logPath);
     }
 
     void LogEnvironment(const SKSE::LoadInterface& skse)
@@ -174,7 +174,7 @@ namespace DietDrCamera::Diagnostics
         HMODULE self{};
         if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                 reinterpret_cast<LPCWSTR>(&logPath), &self)) {
-            spdlog::info("[Environment] DDC module: {} | file version={}", Utf8(ModulePath(self)), FileVersion(ModulePath(self)));
+            spdlog::info("[Environment] OmniCam module: {} | file version={}", Utf8(ModulePath(self)), FileVersion(ModulePath(self)));
             LogBuildIdentity(self);
         }
         LogAddressLibrary(runtime);
@@ -201,7 +201,7 @@ namespace DietDrCamera::Diagnostics
         const auto error = GetLastError();
         if (error != ERROR_NO_MORE_FILES) spdlog::warn("[Modules] Enumeration incomplete: Windows error {}", error);
         std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return _wcsicmp(a.szModule, b.szModule) < 0; });
-        spdlog::info("[Modules] Loaded module snapshot before DDC hooks: {} entries; presence alone does not establish a conflict", entries.size());
+        spdlog::info("[Modules] Loaded module snapshot before OmniCam hooks: {} entries; presence alone does not establish a conflict", entries.size());
         for (const auto& module : entries) {
             spdlog::info("[Modules] {} | file version={} | base=0x{:X} | image bytes={}",
                 Utf8(module.szModule), FileVersion(module.szExePath),

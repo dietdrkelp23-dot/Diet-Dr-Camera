@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <string_view>
 
 namespace DietDrCamera::ProjectileFlyby
 {
@@ -53,13 +54,39 @@ namespace DietDrCamera::ProjectileFlyby
     {
         return npcOwned && archeryWeapon && hasAmmo && InFlight(flying, velocity, firstTick);
     }
+    struct CosmeticProjectiles
+    {
+        // These optional-mod records simulate blood and its surface trace.
+        // Resolve local IDs through the loaded plugin, including ESL slots.
+        static constexpr std::string_view plugin = "Dismembering Framework.esm";
+        static constexpr std::array<std::uint32_t,2> localIDs{0x80E, 0x810};
+        std::array<std::uint32_t,2> forms{};
+        template <class Lookup> void Resolve(Lookup lookup)
+        {
+            for (std::size_t i = 0; i < forms.size(); ++i) forms[i] = lookup(localIDs[i], plugin);
+        }
+        bool Contains(std::uint32_t form) const
+        {
+            return form && std::find(forms.begin(), forms.end(), form) != forms.end();
+        }
+    };
     struct MagicProjectile
     {
         // Native SPEL/ENCH and PROJ values; no spell names or load-order IDs.
         int casting = 0, delivery = 0, spellType = 0;
         std::uint16_t type = 0, flags = 0;
+        bool cosmetic = false;
+        bool DiscreteBeam() const
+        {
+            if (cosmetic) return false;
+            const bool spell = spellType == 0 || spellType == 2 || spellType == 3 ||
+                spellType == 6 || spellType == 12 || spellType == 13;
+            return (casting == 1 || casting == 3) && spell && delivery >= 2 && delivery <= 4 &&
+                type == 4 && (flags & (1u << 11)) == 0;
+        }
         bool Travels() const
         {
+            if (cosmetic) return false;
             // Fire-and-forget spells/staves/scrolls, including finite moving
             // cones such as Ice Storm. Beams, runes, sustained streams and
             // voice powers retain their existing cast/shout effects.
@@ -115,6 +142,18 @@ namespace DietDrCamera::ProjectileFlyby
         std::uint32_t shooter = 0;
     };
 
+    // Copied before the native impact call, which may release the projectile.
+    // A successful native result authorizes this finite, collision-bounded ray.
+    struct BeamContact
+    {
+        Identity projectile;
+        Point from, to;
+        float livingTime = 0;
+        double time = 0;
+        std::uint32_t shooter = 0, spell = 0;
+        bool hitPlayer = false;
+    };
+
     // The camera publishes one value-only player snapshot. Physics callbacks
     // observe actual positions under this lock; no engine pointer crosses it.
     // Fixed storage also bounds volleys, deduplication and pause/load cleanup.
@@ -140,7 +179,13 @@ namespace DietDrCamera::ProjectileFlyby
             const auto moved = position-listener;
             const bool reset = !active.load(std::memory_order_relaxed) || nextView != view || nextCell != cell ||
                 !Fresh(now, published) || moved.Dot(moved) > 512.0f*512.0f;
-            if (reset) shots = {};
+            if (reset) for (auto& shot : shots) {
+                // Lose position continuity and queued noise at a camera gap,
+                // POV switch or teleport, but a finished projectile in this
+                // cell must not become a new flyby when its body moves again.
+                if (nextCell != cell || !shot.done) shot = {};
+                else shot.pending = false;
+            }
             view = nextView; cell = nextCell; listener = position; published = now;
             active.store(true, std::memory_order_relaxed);
             return reset;
@@ -151,6 +196,33 @@ namespace DietDrCamera::ProjectileFlyby
             if (!Active() || !id || !position.Finite() || !std::isfinite(livingTime) || livingTime < 0) return;
             std::scoped_lock guard(lock);
             if (!Active() || !Fresh(now, published)) return;
+            ObserveLocked(id, position, livingTime, now, bolt, terminal, hitPlayer, shooter);
+        }
+        std::size_t Drain(double now, std::array<Pass, 64>& out)
+        {
+            std::scoped_lock guard(lock);
+            std::size_t count = 0;
+            for (auto& shot : shots) if (shot.pending) {
+                if (Active() && Fresh(now, published) && Fresh(now, shot.pass.time, 0.15)) out[count++] = shot.pass;
+                shot.pending = false;
+            }
+            return count;
+        }
+        void ObserveBeam(const BeamContact& beam)
+        {
+            if (!Active() || !beam.projectile || !beam.from.Finite() || !beam.to.Finite() ||
+                !std::isfinite(beam.livingTime) || beam.livingTime < 0) return;
+            std::scoped_lock guard(lock);
+            if (!Active() || !Fresh(beam.time, published)) return;
+            // An instantaneous beam has no two-frame moving-object history.
+            // Both ends use one listener snapshot and the accepted collision.
+            ObserveLocked(beam.projectile, beam.from, beam.livingTime, beam.time, false, false, false, beam.shooter);
+            ObserveLocked(beam.projectile, beam.to, beam.livingTime, beam.time, false, true, beam.hitPlayer, beam.shooter);
+        }
+    private:
+        void ObserveLocked(Identity id, Point position, float livingTime, double now, bool bolt,
+            bool terminal, bool hitPlayer, std::uint32_t shooter)
+        {
             Shot* found = nullptr;
             Shot* free = nullptr;
             for (auto& shot : shots) {
@@ -162,8 +234,16 @@ namespace DietDrCamera::ProjectileFlyby
                 return; // first observation is never a release burst
             }
             auto& shot = *found;
-            if (livingTime < shot.livingTime || !Fresh(now, shot.seen)) {
+            if (livingTime < shot.livingTime) {
                 shot = {id, position, listener, livingTime, now, terminal};
+                return;
+            }
+            if (!Fresh(now, shot.seen)) {
+                // Sleeping/settled projectiles can resume callbacks after a
+                // body is nudged. Reseed geometry without forgetting a pass
+                // or contact. Only a new identity/lifetime starts a new shot.
+                const bool done = shot.done || terminal || hitPlayer;
+                shot = {id, position, listener, livingTime, now, done};
                 return;
             }
             if (hitPlayer) { shot.done = true; shot.pending = false; }
@@ -177,17 +257,6 @@ namespace DietDrCamera::ProjectileFlyby
             shot.done |= terminal;
             shot.position = position; shot.listener = listener; shot.livingTime = livingTime; shot.seen = now;
         }
-        std::size_t Drain(double now, std::array<Pass, 64>& out)
-        {
-            std::scoped_lock guard(lock);
-            std::size_t count = 0;
-            for (auto& shot : shots) if (shot.pending) {
-                if (Active() && Fresh(now, published) && Fresh(now, shot.pass.time, 0.15)) out[count++] = shot.pass;
-                shot.pending = false;
-            }
-            return count;
-        }
-    private:
         struct Shot
         {
             Identity id;

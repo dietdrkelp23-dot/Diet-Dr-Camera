@@ -2,7 +2,6 @@
 #include "Core/Diagnostics.h"
 
 #include <Windows.h>
-#include <process.h>
 #include <array>
 #include <cstdlib>
 #include <fstream>
@@ -14,6 +13,34 @@ namespace
     void Check(bool condition, const char* message)
     {
         if (!condition) throw std::runtime_error(message);
+    }
+
+    void RunAbruptExitChild(const wchar_t* executable, const std::filesystem::path& directory, int session)
+    {
+        SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+        struct Handle {
+            HANDLE value;
+            ~Handle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+        } output{CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+        Check(output.value != INVALID_HANDLE_VALUE, "could not redirect diagnostic child output");
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+        startup.wShowWindow = SW_HIDE;
+        startup.hStdInput = startup.hStdOutput = startup.hStdError = output.value;
+        PROCESS_INFORMATION process{};
+        auto command = L"\"" + std::wstring(executable) + L"\" --abrupt-exit \"" + directory.wstring() + L"\" " + std::to_wstring(session);
+        Check(CreateProcessW(executable, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+            nullptr, nullptr, &startup, &process) != 0, "could not start diagnostic child");
+        Handle child{process.hProcess}, thread{process.hThread};
+        const auto waited = WaitForSingleObject(child.value, 30000);
+        if (waited != WAIT_OBJECT_0) {
+            TerminateProcess(child.value, 1);
+            Check(false, "diagnostic child did not exit");
+        }
+        DWORD exitCode{};
+        Check(GetExitCodeProcess(child.value, &exitCode) && exitCode == 0, "abrupt-exit child failed");
     }
 
     std::string ReadFile(const std::filesystem::path& path)
@@ -43,24 +70,19 @@ int wmain(int argc, wchar_t** argv)
         Check(std::filesystem::create_directory(directory), "could not create unique test directory");
         wchar_t executable[32768]{};
         Check(GetModuleFileNameW(nullptr, executable, 32768) != 0, "test executable path unavailable");
-        const auto quotedExecutable = L"\"" + std::wstring(executable) + L"\"";
-        const auto quotedDirectory = L"\"" + directory.wstring() + L"\"";
         for (int session = 0; session < 5; ++session) {
-            const auto marker = std::to_wstring(session);
-            Check(_wspawnl(_P_WAIT, executable, quotedExecutable.c_str(), L"--abrupt-exit", quotedDirectory.c_str(), marker.c_str(),
-                static_cast<const wchar_t*>(nullptr)) == 0,
-                "abrupt-exit child failed");
-            const auto current = ReadFile(directory / "DietDrCamera.log");
+            RunAbruptExitChild(executable, directory, session);
+            const auto current = ReadFile(directory / "OmniCam.log");
             Check(current.find("fatal-marker") != std::string::npos &&
                 current.find("session-marker-" + std::to_string(session)) != std::string::npos,
                 "startup or fatal output was lost after abrupt exit");
         }
         for (int previous = 1; previous <= 3; ++previous) {
-            const auto contents = ReadFile(directory / ("DietDrCamera." + std::to_string(previous) + ".log"));
+            const auto contents = ReadFile(directory / ("OmniCam." + std::to_string(previous) + ".log"));
             Check(contents.find("session-marker-" + std::to_string(4 - previous)) != std::string::npos,
                 "wrong previous session retained");
         }
-        Check(!std::filesystem::exists(directory / "DietDrCamera.4.log"), "retention exceeded three previous sessions");
+        Check(!std::filesystem::exists(directory / "OmniCam.4.log"), "retention exceeded three previous sessions");
 
         using namespace DietDrCamera;
         Diagnostics::StartSession(directory / "details");
@@ -105,15 +127,15 @@ int wmain(int argc, wchar_t** argv)
         Check(Diagnostics::DescribeBranchTarget(reinterpret_cast<std::uintptr_t>(stub)).find(" -> ") == std::string::npos,
             "cyclic branch was followed");
 
-        const auto contents = ReadFile(directory / "details/DietDrCamera.log");
-        for (const auto* required : {"Skyrim 1.6.659.0", "GOG (runtime version)", "SKSE 2.2.3", "DDC PE timestamp=",
+        const auto contents = ReadFile(directory / "details/OmniCam.log");
+        for (const auto* required : {"Skyrim 1.6.659.0", "GOG (runtime version)", "SKSE 2.2.3", "OmniCam PE timestamp=",
                 "Address Library candidate", "unavailable", "format=1", "format=2", "format=5", "runtime matches=true",
                 "unreadable/truncated header", "runtime matches=false", "unsupported format", "End snapshot",
                 "[Startup] test checkpoint", "Unreadable test address 0x1 (unmapped)", "read 96/96 bytes"}) {
             if (contents.find(required) == std::string::npos) throw std::runtime_error(std::string("missing diagnostic: ") + required);
         }
         spdlog::debug("debug-must-be-off-by-default");
-        Check(ReadFile(directory / "details/DietDrCamera.log").find("debug-must-be-off-by-default") == std::string::npos,
+        Check(ReadFile(directory / "details/OmniCam.log").find("debug-must-be-off-by-default") == std::string::npos,
             "verbose logging was enabled by default");
         const auto workingLogger = spdlog::default_logger();
         { std::ofstream file(directory / "blocked"); file << "preserve-me"; }
@@ -124,13 +146,13 @@ int wmain(int argc, wchar_t** argv)
             "failed log setup destroyed the existing logger or file");
         std::filesystem::current_path(originalCwd);
         spdlog::set_default_logger(originalLogger);
-        spdlog::drop("DietDrCamera");
+        spdlog::drop("OmniCam");
         // workingLogger keeps its file open until this scope ends; cleanup below
         // runs after that reference is released.
     } catch (const std::exception& error) {
         std::filesystem::current_path(originalCwd);
         spdlog::set_default_logger(originalLogger);
-        spdlog::drop("DietDrCamera");
+        spdlog::drop("OmniCam");
         std::cerr << error.what() << "\nEvidence retained at " << directory.string() << '\n';
         return 1;
     }

@@ -1,4 +1,12 @@
-# Diet Dr Camera 1.2.0
+# OmniCam 1.3.0
+
+- Renamed Diet Dr Camera to OmniCam. Existing presets still work.
+- Added Combat FOV and optional DBVO 2 camera switching.
+- Added options to disable the death and ragdoll cameras.
+- Improved Apply controls, menus, and controller navigation.
+- Fixed camera shaking, Whirlwind Sprint jerks, and startup issues.
+
+# OmniCam 1.2.0
 
 Adds automatic startup diagnostics for compatibility reports, expanded Damage
 Reaction and projectile flyby noise, Crowd Modifier, more Target Lock biases,
@@ -151,7 +159,7 @@ full gameplay compatibility across every runtime is still unverified.
 - Preset format 9 preserves the new controls, disabled tuning and explicit
   zero overrides. Earlier presets keep their existing camera behavior.
 
-# Diet Dr Camera 1.1.1
+# OmniCam 1.1.1
 
 - Whole-tab copying now treats the Sheathed and Unsheathed base rows as matching
   settings in either direction. This applies to Third Person, Target Lock,
@@ -161,7 +169,7 @@ full gameplay compatibility across every runtime is still unverified.
 - Regression checks cover both directions, reordered rows, indoor/outdoor
   separation, unmatched entries and ambiguous identities.
 
-# Diet Dr Camera 1.1.0
+# OmniCam 1.1.0
 
 Adds direct numeric editing, whole-tab copying, Target Lock Pitch Bias,
 startup compatibility fixes, and menu refinements.
@@ -205,7 +213,7 @@ startup compatibility fixes, and menu refinements.
 See [RUNTIME-TESTING.md](RUNTIME-TESTING.md) for the evidence and remaining coverage,
 and [BUILDING.md](BUILDING.md) for the full source build instructions.
 
-# Diet Dr Camera 1.0.0
+# OmniCam 1.0.0
 
 Initial public release for Skyrim SE and AE on Windows x64. Configure the camera
 in game through SKSE Menu Framework and Quick Tune. No ESP, MCM or Papyrus scripts

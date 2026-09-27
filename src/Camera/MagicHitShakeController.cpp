@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Hooks/ProjectileImpact.h"
 #include "Camera/MagicHitShakeController.h"
 #include "Camera/DamageReactionController.h"
 #include "Camera/CameraNoiseController.h"
@@ -6,6 +7,7 @@
 #include "Camera/MagicCast.h"
 #include "Camera/StateResolver.h"
 #include "Core/MagicHitShake.h"
+#include "Core/ProjectileFlyby.h"
 #include "Settings/EquippedItemBinding.h"
 #include "Settings/SettingsManager.h"
 #include <chrono>
@@ -17,12 +19,12 @@ namespace DietDrCamera::MagicHitShakeController
         MagicHitShake::ShotBridge bridge;
         using Source = RE::MagicSystem::CastingSource;
         using UpdateFn = void(*)(RE::Projectile*, float);
-        using ImpactFn = void(*)(RE::Projectile*, RE::TESObjectREFR*, const RE::NiPoint3&, const RE::NiPoint3&,
-                                RE::hkpCollidable*, std::int32_t, std::uint32_t);
+        using ImpactFn = ProjectileImpact::Function;
         UpdateFn originalUpdate = nullptr;
         ImpactFn originalImpact = nullptr;
         UpdateFn originalConeUpdate = nullptr;
         ImpactFn originalConeImpact = nullptr;
+        ImpactFn originalBeamImpact = nullptr;
 
         double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -81,7 +83,7 @@ namespace DietDrCamera::MagicHitShakeController
             originalUpdate(projectile, dt);
         }
 
-        void AddImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
+        ProjectileImpact::Result AddImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
                        const RE::NiPoint3& velocity, RE::hkpCollidable* collidable, std::int32_t arg6, std::uint32_t arg7)
         {
             CameraNoiseController::NotifyNpcMagicFlight(projectile, position, true, target && target->IsPlayerRef());
@@ -106,8 +108,9 @@ namespace DietDrCamera::MagicHitShakeController
             }
             // The next handler may destroy the projectile. Only copied values
             // cross this call; neither impacts nor trajectories are changed.
-            originalImpact(projectile, target, position, velocity, collidable, arg6, arg7);
+            const auto result = originalImpact(projectile, target, position, velocity, collidable, arg6, arg7);
             if (eligible) bridge.Contact(id, magic, targetID, travel, now, distance);
+            return result;
         }
 
         void UpdateCone(RE::Projectile* projectile, float dt)
@@ -116,7 +119,7 @@ namespace DietDrCamera::MagicHitShakeController
             originalConeUpdate(projectile, dt);
         }
 
-        void ConeImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
+        ProjectileImpact::Result ConeImpact(RE::Projectile* projectile, RE::TESObjectREFR* target, const RE::NiPoint3& position,
                         const RE::NiPoint3& velocity, RE::hkpCollidable* collidable, std::int32_t arg6, std::uint32_t arg7)
         {
             // Moving area waves survive actor contacts. A contact location is
@@ -125,7 +128,7 @@ namespace DietDrCamera::MagicHitShakeController
             const bool hitPlayer = target && target->IsPlayerRef();
             if (projectile) CameraNoiseController::NotifyNpcMagicFlight(
                 projectile, projectile->GetPosition(), hitPlayer, hitPlayer);
-            originalConeImpact(projectile, target, position, velocity, collidable, arg6, arg7);
+            return originalConeImpact(projectile, target, position, velocity, collidable, arg6, arg7);
         }
 
         RE::MagicItem* HandMagic(RE::PlayerCharacter* player, bool left, RE::TESObjectWEAP*& staff)
@@ -194,6 +197,38 @@ namespace DietDrCamera::MagicHitShakeController
             }
         };
 
+        RE::Projectile::ImpactData* BeamImpact(RE::Projectile* projectile, RE::TESObjectREFR* target,
+            const RE::NiPoint3& position, const RE::NiPoint3& velocity,
+            RE::hkpCollidable* collidable, std::int32_t arg6, std::uint32_t arg7)
+        {
+            std::optional<ProjectileFlyby::BeamContact> contact;
+            RE::ObjectRefHandle shooterHandle;
+            if (projectile) {
+                const auto& data = projectile->GetProjectileRuntimeData();
+                const auto shooter = data.shooter.get();
+                const auto* form = projectile->GetBaseObject();
+                const auto* base = form ? form->As<RE::BGSProjectile>() : nullptr;
+                if (shooter && shooter->IsActor() && !shooter->IsPlayerRef() && data.spell && base && !data.ammoSource) {
+                    const ProjectileFlyby::MagicProjectile magic{static_cast<int>(data.spell->GetCastingType()),
+                        static_cast<int>(data.spell->GetDelivery()), static_cast<int>(data.spell->GetSpellType()),
+                        base->data.types.underlying(), base->data.flags.underlying()};
+                    if (magic.DiscreteBeam()) {
+                        shooterHandle = data.shooter;
+                        const auto from = projectile->GetPosition();
+                        contact = {{projectile->GetFormID(), projectile->GetHandle().native_handle()},
+                            {from.x, from.y, from.z}, {position.x, position.y, position.z}, data.livingTime, Now(),
+                            data.shooter.native_handle(), data.spell->GetFormID(), target && target->IsPlayerRef()};
+                    }
+                }
+            }
+            const auto result = originalBeamImpact(projectile, target, position, velocity, collidable, arg6, arg7);
+            if (result && contact) {
+                CameraNoiseController::NotifyNpcMagicBeam(*contact);
+                CameraNoiseController::NotifyNpcMagicShot(shooterHandle, contact->spell, contact->projectile.form);
+            }
+            return result; // Preserve the native result; never dereference after the original.
+        }
+
         void Subscribe()
         {
             static CastSink sink;
@@ -212,12 +247,14 @@ namespace DietDrCamera::MagicHitShakeController
         installed = true;
         REL::Relocation<std::uintptr_t> table{RE::VTABLE_MissileProjectile[0]};
         originalUpdate = reinterpret_cast<UpdateFn>(table.write_vfunc(0xAB, &UpdateProjectile));
-        originalImpact = reinterpret_cast<ImpactFn>(table.write_vfunc(0xBD, &AddImpact));
+        originalImpact = reinterpret_cast<ImpactFn>(table.write_vfunc(0xBD, static_cast<ImpactFn>(&AddImpact)));
         REL::Relocation<std::uintptr_t> coneTable{RE::VTABLE_ConeProjectile[0]};
         originalConeUpdate = reinterpret_cast<UpdateFn>(coneTable.write_vfunc(0xAB, &UpdateCone));
-        originalConeImpact = reinterpret_cast<ImpactFn>(coneTable.write_vfunc(0xBD, &ConeImpact));
+        originalConeImpact = reinterpret_cast<ImpactFn>(coneTable.write_vfunc(0xBD, static_cast<ImpactFn>(&ConeImpact)));
+        REL::Relocation<std::uintptr_t> beamTable{RE::VTABLE_BeamProjectile[0]};
+        originalBeamImpact = reinterpret_cast<ImpactFn>(beamTable.write_vfunc(0xBD, static_cast<ImpactFn>(&BeamImpact)));
         Subscribe();
-        spdlog::info("[HITSHAKE-MAGIC] native missile launch/flyby/contact and moving-cone flyby/contact observers installed");
+        spdlog::info("[HITSHAKE-MAGIC] missile/cone observers and accepted finite-beam contacts installed; shock value applications use native actor-value resolution");
     }
 
     void Reset() { bridge.SetView(-1); }

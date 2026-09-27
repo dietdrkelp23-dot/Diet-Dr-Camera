@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$RuntimeImage,
     [Parameter(Mandatory=$true)][string]$AddressLibrary,
     [string]$Checker = 'build/release-candidate/Release/RuntimeLayoutChecks.exe',
-    [ValidateSet('clean','camera-chain','furniture-chain','camera-wrong-target','ui-driver-conflict','main-call-conflict','dialogue-call-conflict','ui-job-install','call-changed-after-preflight','ui-changed-after-preflight')]
+    [ValidateSet('clean','camera-chain','furniture-chain','camera-wrong-target','ui-driver-conflict','main-call-conflict','dialogue-call-conflict','ui-job-install','call-changed-after-preflight','ui-changed-after-preflight','call-target-changed-after-preflight','call-install-chain','call-install-nonexec','call-install-unvalidated','caster-owned-entry','caster-entry-conflict','main-entry-detour','main-entry-detour-call-conflict','main-entry-detour-nonexec','main-entry-detour-engine-target')]
     [string]$Scenario = 'clean',
     [string]$ReportDirectory = 'build/diagnostics/runtime-tests'
 )
@@ -18,14 +18,24 @@ $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($imagePath).ProductVers
 if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'No recognized runtime version in the executable.' }
 $name = 'runtime-' + $version + '-' + $Scenario + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
 $log = Join-Path $reportRoot ($name + '.log')
-$previousPreference = $ErrorActionPreference
+$startInfo = New-Object System.Diagnostics.ProcessStartInfo
+$startInfo.FileName = $checkerPath
+$startInfo.Arguments = '--image "' + $imagePath + '" "' + $libraryPath + '" "' + $Scenario + '"'
+$startInfo.UseShellExecute = $false
+$startInfo.CreateNoWindow = $true
+$startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+$startInfo.RedirectStandardOutput = $true
+$startInfo.RedirectStandardError = $true
+$child = [System.Diagnostics.Process]::Start($startInfo)
 try {
-    $ErrorActionPreference = 'Continue'
-    $checkerArguments = @('--image', $imagePath, $libraryPath)
-    if ($Scenario -ne 'clean') { $checkerArguments += $Scenario }
-    & $checkerPath @checkerArguments 2>&1 | ForEach-Object { $_.ToString() } | Tee-Object -FilePath $log
-    $checkerExit = $LASTEXITCODE
-} finally { $ErrorActionPreference = $previousPreference }
+    $stdout = $child.StandardOutput.ReadToEndAsync()
+    $stderr = $child.StandardError.ReadToEndAsync()
+    $child.WaitForExit()
+    $text = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
+    [IO.File]::WriteAllText($log, $text)
+    Write-Host $text
+    $checkerExit = $child.ExitCode
+} finally { $child.Dispose() }
 $marker = if ($Scenario -eq 'clean') { 'Complete hook preflight passed' } else { 'Runtime scenario passed: ' + $Scenario }
 $passed = $checkerExit -eq 0 -and (Select-String -LiteralPath $log -SimpleMatch $marker -Quiet)
 $record = [ordered]@{

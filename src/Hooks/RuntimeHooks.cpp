@@ -8,6 +8,7 @@
 #include <cstring>
 #include <span>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace DietDrCamera::RuntimeHooks
 {
@@ -18,6 +19,13 @@ namespace DietDrCamera::RuntimeHooks
         std::array<std::uint8_t, 6> uiBranchBytes{};
         std::string inspecting;
         std::uintptr_t inspectingAddress{};
+        std::unordered_map<std::uintptr_t, std::array<std::uint8_t, 5>> callBytes;
+
+        void RememberCall(std::uintptr_t address)
+        {
+            auto& bytes = callBytes[address];
+            std::memcpy(bytes.data(), reinterpret_cast<const void*>(address), bytes.size());
+        }
 
         void LogInspectionBytes()
         {
@@ -28,7 +36,7 @@ namespace DietDrCamera::RuntimeHooks
         [[noreturn]] void Fail(std::string_view detail)
         {
             LogInspectionBytes();
-            const auto message = fmt::format("Diet Dr Camera hook validation failed on Skyrim {}: {}. "
+            const auto message = fmt::format("OmniCam hook validation failed on Skyrim {}: {}. "
                 "An executable layout difference or another DLL's patch can cause this. "
                 "Report this full message together with DietDrCamera.log and skse64.log.\nLog: {}",
                 REL::Module::get().version().string(), inspecting.empty() ? std::string(detail) :
@@ -40,6 +48,24 @@ namespace DietDrCamera::RuntimeHooks
 #else
             SKSE::stl::report_and_fail(message);
 #endif
+        }
+
+        bool IsExecutable(std::uintptr_t address)
+        {
+            MEMORY_BASIC_INFORMATION info{};
+            return VirtualQuery(reinterpret_cast<const void*>(address), &info, sizeof(info)) &&
+                info.State == MEM_COMMIT && !(info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+                (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+        }
+
+        bool IsEngineData(std::uintptr_t address, std::size_t size)
+        {
+            MEMORY_BASIC_INFORMATION info{};
+            return VirtualQuery(reinterpret_cast<const void*>(address), &info, sizeof(info)) &&
+                reinterpret_cast<std::uintptr_t>(info.AllocationBase) == REL::Module::get().base() &&
+                info.State == MEM_COMMIT && !(info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+                address - reinterpret_cast<std::uintptr_t>(info.BaseAddress) <= info.RegionSize &&
+                size <= info.RegionSize - (address - reinterpret_cast<std::uintptr_t>(info.BaseAddress));
         }
 
         std::span<const std::uint8_t> Function(std::uintptr_t address)
@@ -78,25 +104,17 @@ namespace DietDrCamera::RuntimeHooks
                 end = next->EndAddress;
             }
             if (end - entry->BeginAddress > 0x20000) Fail("engine function exceeds scan limit");
-            return { reinterpret_cast<const std::uint8_t*>(address), imageBase + end - address };
-        }
-
-        bool IsExecutable(std::uintptr_t address)
-        {
-            MEMORY_BASIC_INFORMATION info{};
-            return VirtualQuery(reinterpret_cast<const void*>(address), &info, sizeof(info)) &&
-                info.State == MEM_COMMIT && !(info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
-                (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
-        }
-
-        bool IsEngineData(std::uintptr_t address, std::size_t size)
-        {
-            MEMORY_BASIC_INFORMATION info{};
-            return VirtualQuery(reinterpret_cast<const void*>(address), &info, sizeof(info)) &&
-                reinterpret_cast<std::uintptr_t>(info.AllocationBase) == REL::Module::get().base() &&
-                info.State == MEM_COMMIT && !(info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
-                address - reinterpret_cast<std::uintptr_t>(info.BaseAddress) <= info.RegionSize &&
-                size <= info.RegionSize - (address - reinterpret_cast<std::uintptr_t>(info.BaseAddress));
+            const std::span<const std::uint8_t> code{
+                reinterpret_cast<const std::uint8_t*>(address), imageBase + end - address};
+            if (const auto target = RuntimePatchInspection::InlineEntryJumpTarget(code)) {
+                spdlog::info("[Runtime] Function entry {} redirects to {}", Diagnostics::DescribeAddress(address),
+                    Diagnostics::DescribeBranchTarget(*target));
+                if (!IsExecutable(*target) || IsEngineData(*target, 1))
+                    Fail("entry detour target is not executable code outside Skyrim");
+                // Leave the other plugin's entry hook in place. The decoder
+                // skips its inline pointer and still validates the native body.
+            }
+            return code;
         }
 
         void LogCalls(std::span<const std::uint8_t> code, std::uintptr_t address, std::uintptr_t expected)
@@ -173,6 +191,7 @@ namespace DietDrCamera::RuntimeHooks
             }
             if (!offset) Fail(fmt::format("missing or ambiguous {} call", name));
             spdlog::info("[Runtime] {}: ID {} +0x{:X}", name, caller.id(), *offset);
+            RememberCall(address + *offset);
             return address + *offset;
         }
     }
@@ -233,6 +252,7 @@ namespace DietDrCamera::RuntimeHooks
             Fail("unrecognized dialogue timer decrement");
         }
         spdlog::info("[Runtime] dialogue close timer: +0x{:X}", resolved.dialogueTimer - dialogue);
+        RememberCall(resolved.dialogueTimer);
         std::memcpy(uiBranchBytes.data(), reinterpret_cast<const void*>(resolved.uiJobBranch), resolved.uiJobBranchLength);
         sites = resolved;
         prepared = true;
@@ -249,11 +269,35 @@ namespace DietDrCamera::RuntimeHooks
 
     void RequireCall(std::uintptr_t address)
     {
-        if (*reinterpret_cast<const std::uint8_t*>(address) != 0xE8) {
-            inspecting = fmt::format("installing call at {}; expected E8 opcode", Diagnostics::DescribeAddress(address));
+        const auto expected = callBytes.find(address);
+        if (expected == callBytes.end() || expected->second[0] != 0xE8 ||
+            std::memcmp(expected->second.data(), reinterpret_cast<const void*>(address), expected->second.size())) {
+            inspecting = fmt::format("installing call at {}; expected the validated call bytes", Diagnostics::DescribeAddress(address));
             inspectingAddress = address;
-            Fail("a call site changed after preflight");
+            Fail(expected == callBytes.end() ? "call site was not validated" : "a call site changed after preflight");
         }
+    }
+
+    bool TryReplaceCode6(std::uintptr_t address, const std::array<std::uint8_t, 6>& expected,
+        const std::array<std::uint8_t, 6>& replacement)
+    {
+        if (!IsExecutable(address) || !IsEngineData(address, replacement.size()) ||
+            !REL::safe_write(address, replacement.data(), replacement.size(), expected)) return false;
+        return std::memcmp(reinterpret_cast<const void*>(address), replacement.data(), replacement.size()) == 0 &&
+            FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(address), replacement.size()) != 0;
+    }
+
+    std::uintptr_t InstallCall(std::uintptr_t address, std::uintptr_t hook)
+    {
+        RequireCall(address);
+        if (!IsExecutable(hook)) {
+            inspecting = fmt::format("installing callback {}", Diagnostics::DescribeAddress(hook));
+            inspectingAddress = address;
+            Fail("hook callback is not executable");
+        }
+        const auto original = SKSE::GetTrampoline().write_call<5>(address, hook);
+        RememberCall(address);
+        return original;
     }
 
     void DisableUIJob()

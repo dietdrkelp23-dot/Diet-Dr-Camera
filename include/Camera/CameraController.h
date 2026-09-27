@@ -2,6 +2,7 @@
 #include "Settings/CameraProfile.h"
 #include "Camera/VanityTransition.h"
 #include "Camera/TargetLockBias.h"
+#include "Dialogue/DialogueCameraMotion.h"
 
 #include <cstdint>
 #include <string>
@@ -427,6 +428,8 @@ namespace DietDrCamera
         // target through the SAME angle for the two halves to stay a
         // conversation-width apart.
         float m_dlgReverseBlend = 0.0f;
+        float m_dlgReverseVelocity = 0.0f;
+        DialogueSideExit m_dlgSideExit;
         // Last frame's value, so a snap between the two ends can be detected
         // and the position filter re-seeded rather than smearing the cut.
         bool  m_prevDialogueActiveForLockstep = false;

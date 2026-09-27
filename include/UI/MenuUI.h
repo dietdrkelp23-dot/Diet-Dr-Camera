@@ -50,6 +50,9 @@ namespace DietDrCamera
         // Noise uses the same held-duration preview here as in Quick Tune.
         [[nodiscard]] static bool IsMainMenuOpen();
 
+        // Only while the Combat FOV detail pane is visible in the main menu.
+        [[nodiscard]] static bool IsCombatFOVPreviewActive();
+
         // True while Quick Tune holds the TDM directional-movement disable (it
         // claims one while open with a target locked, so QT's R3 POV toggle
         // can't drop the lock). PUBLISHED FOR THE TDM ORPHAN WATCHDOG: that

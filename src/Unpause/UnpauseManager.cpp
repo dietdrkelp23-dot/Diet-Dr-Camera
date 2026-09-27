@@ -263,9 +263,7 @@ namespace DietDrCamera::UnpauseManager
             sAdvanceMovies = sites.advanceMovies;
             sGetExecConsoleSingleton = sites.getConsole;
             sExecConsole = sites.executeConsole;
-            RuntimeHooks::RequireCall(sites.mainUpdate);
-            auto& trampoline = SKSE::GetTrampoline();
-            sMainThreadOriginal = trampoline.write_call<5>(sites.mainUpdate, &MainThreadHook);
+            sMainThreadOriginal = RuntimeHooks::InstallCall(sites.mainUpdate, &MainThreadHook);
             RuntimeHooks::DisableUIJob();
             spdlog::info("[Unpause] Main-thread UI drive installed; displaced function=0x{:X}", sMainThreadOriginal.address());
         }
@@ -468,8 +466,7 @@ namespace DietDrCamera::UnpauseManager
             spdlog::info("[Unpause] UpdateAutoCloseTimer pre-patch bytes at 0x{:x}: {:02x} {:02x} {:02x} {:02x} {:02x}",
                          callSite, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]);
 
-            auto& trampoline = SKSE::GetTrampoline();
-            trampoline.write_call<5>(callSite,
+            RuntimeHooks::InstallCall(callSite,
                                      reinterpret_cast<std::uintptr_t>(&DialogueMenu_UpdateAutoCloseTimer_Hook));
             spdlog::info("[Unpause] DialogueMenu UpdateAutoCloseTimer call site patched at 0x{:x}", callSite);
         }

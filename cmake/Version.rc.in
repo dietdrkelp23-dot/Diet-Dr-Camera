@@ -13,11 +13,11 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "FileDescription", "Diet Dr Camera"
+            VALUE "FileDescription", "OmniCam"
             VALUE "FileVersion", "@PROJECT_VERSION@"
-            VALUE "InternalName", "DietDrCamera"
+            VALUE "InternalName", "OmniCam"
             VALUE "OriginalFilename", "DietDrCamera.dll"
-            VALUE "ProductName", "Diet Dr Camera"
+            VALUE "ProductName", "OmniCam"
             VALUE "ProductVersion", "@PROJECT_VERSION@"
         END
     END

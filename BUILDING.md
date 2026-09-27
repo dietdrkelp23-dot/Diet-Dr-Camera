@@ -1,4 +1,4 @@
-# Building Diet Dr Camera from source
+# Building OmniCam from source
 
 These instructions build the Windows x64 SKSE plugin and its standalone checks.
 Skyrim, SKSE, a mod manager, and a Nexus account are **not required to build**.
@@ -30,7 +30,7 @@ If using a development checkout whose CommonLib is a submodule, run
 `git submodule update --init --recursive` first. The complete public source
 archive and the prepared public repository already contain its source files.
 
-For version 1.2.0, extract `Diet Dr Camera - Source-1.2.0.zip` to a short path
+For version 1.3.0, extract `OmniCam - Source-1.3.0.zip` to a short path
 and run the commands below from that directory. The matching source ZIP is
 the release's complete build input; it does not require a GitHub tag to exist.
 

@@ -2772,10 +2772,8 @@ namespace DietDrCamera
 
     void CameraNoiseController::InstallHook()
     {
-        auto& trampoline = SKSE::GetTrampoline();
         const auto callSite = RuntimeHooks::Get().cameraUpdate;
-        RuntimeHooks::RequireCall(callSite);
-        TESCameraUpdateHook::func = trampoline.write_call<5>(
+        TESCameraUpdateHook::func = RuntimeHooks::InstallCall(
             callSite, &TESCameraUpdateHook::thunk);
         spdlog::info("CameraNoise: hooked TESCamera::Update call at 0x{:x}",
                      callSite);
@@ -4387,6 +4385,28 @@ namespace DietDrCamera
                                             sLiveNoiseEditTp).count() < 0.5f;
     }
 
+    namespace
+    {
+        ProjectileFlyby::CosmeticProjectiles sCosmeticProjectiles;
+        std::atomic<bool> sCosmeticProjectilesReady{false};
+    }
+
+    void CameraNoiseController::InitializeGameForms()
+    {
+        if (sCosmeticProjectilesReady.load(std::memory_order_acquire)) return;
+        auto* data = RE::TESDataHandler::GetSingleton();
+        if (!data) return;
+        sCosmeticProjectiles.Resolve([&](std::uint32_t localID, std::string_view plugin) {
+            const auto* form = data->LookupForm<RE::BGSProjectile>(localID, plugin);
+            return form ? form->GetFormID() : 0u;
+        });
+        // Publish once after DataLoaded. Physics callbacks only read this set.
+        sCosmeticProjectilesReady.store(true, std::memory_order_release);
+        if (sCosmeticProjectiles.forms[0] || sCosmeticProjectiles.forms[1])
+            spdlog::info("[NPC-MAGIC-FLYBY] excluding cosmetic blood spray/traces: {:08X}, {:08X}",
+                sCosmeticProjectiles.forms[0], sCosmeticProjectiles.forms[1]);
+    }
+
     void CameraNoiseController::NotifyNpcArcheryFlight(RE::Projectile* projectile, const RE::NiPoint3& pos,
                                                        bool terminal, bool hitPlayer)
     {
@@ -4437,7 +4457,8 @@ namespace DietDrCamera
         diag.candidates.fetch_add(1, std::memory_order_relaxed);
         const ProjectileFlyby::MagicProjectile magic{
             static_cast<int>(data.spell->GetCastingType()), static_cast<int>(data.spell->GetDelivery()),
-            static_cast<int>(data.spell->GetSpellType()), base->data.types.underlying(), base->data.flags.underlying()};
+            static_cast<int>(data.spell->GetSpellType()), base->data.types.underlying(), base->data.flags.underlying(),
+            sCosmeticProjectilesReady.load(std::memory_order_acquire) && sCosmeticProjectiles.Contains(base->GetFormID())};
         // Cones such as Ice Storm continue through actor contacts. Missiles
         // stop after processing an impact, with their final segment supplied
         // separately by AddImpact. Very slow mod spells can still pass by.
@@ -4456,6 +4477,17 @@ namespace DietDrCamera
         if (terminal) diag.contacts.fetch_add(1, std::memory_order_relaxed);
         sNpcMagicFlybys.tracks.Observe({projectile->GetFormID(), projectile->GetHandle().native_handle()},
             {pos.x, pos.y, pos.z}, data.livingTime, FlybyNow(), false, terminal, hitPlayer, data.shooter.native_handle());
+    }
+
+    void CameraNoiseController::NotifyNpcMagicBeam(const ProjectileFlyby::BeamContact& contact)
+    {
+        // Finite beams arrive only after a native contact was accepted. A hit
+        // on the player belongs to DamageReaction, so it cannot also be a flyby.
+        sNpcMagicFlybys.tracks.ObserveBeam(contact);
+        static std::atomic<unsigned> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 32)
+            spdlog::info("[NPC-MAGIC-BEAM] accepted spell={:08X} projectile={:08X} playerHit={}",
+                contact.spell, contact.projectile.form, contact.hitPlayer);
     }
 
     void CameraNoiseController::NotifyNpcMagicShot(RE::ObjectRefHandle shooter, RE::FormID spell, RE::FormID projectile)
@@ -7930,6 +7962,7 @@ namespace DietDrCamera
         static float                                 sShoutFadeDur     = 0.0f;
         static float                                 sShoutEnvAtFire   = 0.0f;
         static bool                                  sWasShoutingNoise = false;
+        static ShoutNoiseRestart                     sShoutRestart;
         // Release punch: transient added on top of the sustained level a
         // shout's word count earns.
         static std::chrono::steady_clock::time_point sShoutPunchTp{};
@@ -7958,6 +7991,8 @@ namespace DietDrCamera
             // rides on whatever noise is playing, including the underlying
             // state's when no shout-specific entry exists.
             const bool  isShoutingNow = shoutActive && active != &fallbackGlobal;
+            const bool shoutRestarted = sShoutRestart.Observe(isShoutingNow,
+                static_cast<std::uint64_t>(sr.GetShoutStartTime().time_since_epoch().count()));
 
             // Word-tier boundaries + amps. Word 1 rises FAST (kRiseTime) to a
             // visible floor and holds for the rest of the word, instead of the
@@ -7994,6 +8029,19 @@ namespace DietDrCamera
             auto smooth = [](float t) { t = std::clamp(t, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
             auto wordAmp   = [&](int wc) { return wc >= 3 ? kAmp3   : (wc == 2 ? kAmp2   : kAmp1);   };
             auto wordPunch = [&](int wc) { return wc >= 3 ? kPunch3 : (wc == 2 ? kPunch2 : kPunch1); };
+
+            if (shoutRestarted) {
+                // A rapid recast cancels the old linger without changing the
+                // active profile. Its word envelope still restarts, so assigning
+                // that fresh amplitude directly would cut the visible shake in
+                // one frame. Hand the actual outgoing blend to the same fade
+                // used on shout exit, before overwriting its envelope below.
+                shoutHandoffArmed = true;
+                const float peakRatio = std::clamp(sShoutEnvAtFire / kAmp3, 0.0f, 1.0f);
+                shoutHandoffDur = (std::max)(sShoutFadeDur, 0.45f) * peakRatio;
+                sShoutPunchAmp = 0.0f;
+                sShoutWordApplied = 0;
+            }
 
             if (isShoutingNow) {
                 // Fade Duration is now the hand-off duration (see the

@@ -183,7 +183,7 @@ namespace DietDrCamera
 
     bool PresetManager::LoadPreset(std::string name) try
     {
-        _lastError = "Failed to load preset; see DietDrCamera.log.";
+        _lastError = "Failed to load preset; see OmniCam.log.";
         auto path = PresetPath(name);
         if (!std::filesystem::exists(path)) {
             spdlog::warn("PresetManager: preset '{}' not found", name);
@@ -205,7 +205,7 @@ namespace DietDrCamera
         // (otherwise they'd re-bind on every preset). Preserve all of them
         // across the reset + apply below.
         if (!CanApplyPreset(tbl)) {
-            _lastError = "Preset is invalid or needs a newer Diet Dr Camera. Current settings were kept.";
+            _lastError = "Preset is invalid or needs a newer OmniCam. Current settings were kept.";
             spdlog::warn("PresetManager: '{}': {}", name, _lastError);
             return false;
         }
@@ -362,7 +362,7 @@ namespace DietDrCamera
             const auto path = PresetPath(name);
             const auto previous = toml::parse_file(PathUtf8(path));
             if (!CanApplyPreset(previous)) {
-                _lastError = "Preset is invalid or needs a newer Diet Dr Camera. The file was kept.";
+                _lastError = "Preset is invalid or needs a newer OmniCam. The file was kept.";
                 spdlog::warn("PresetManager: '{}': {}", name, _lastError);
                 return false;
             }

@@ -8,6 +8,44 @@ using namespace DietDrCamera::ProjectileFlyby;
 static void Require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
 static bool Near(float a, float b) { return std::abs(a-b) < 0.0005f; }
 
+static void MagicBeams()
+{
+    Require(MagicProjectile{1,2,0,4,512}.DiscreteBeam() &&
+        MagicProjectile{1,3,0,4,1}.DiscreteBeam() && MagicProjectile{3,2,13,4,0}.DiscreteBeam(),
+        "Lightning, targeted hitscan or scroll beam loses its accepted finite segment");
+    Require(!MagicProjectile{2,2,0,4,512}.DiscreteBeam() &&
+        !MagicProjectile{1,2,0,4,2048}.DiscreteBeam() && !MagicProjectile{1,2,0,1,0}.DiscreteBeam() &&
+        !MagicProjectile{1,0,0,4,0}.DiscreteBeam() && !MagicProjectile{1,1,0,4,0}.DiscreteBeam() &&
+        !MagicProjectile{1,2,4,4,0}.DiscreteBeam(),
+        "Concentration, continuous, non-beam or passive magic acquired a discrete beam pass");
+    for (int view : {0,1}) for (float distance : {30.0f,450.0f,600.0f}) {
+        Tracker tracker(kMagicRange);
+        std::array<Pass,64> out;
+        tracker.Publish(view,42,{},10);
+        BeamContact beam{{1,2},{-1000,distance,0},{1000,distance,0},0,10,1234,5678};
+        tracker.ObserveBeam(beam);
+        const auto count = tracker.Drain(10,out);
+        Require(count == (distance < kMagicRange ? 1u : 0u), "Same-frame lightning misses a valid near pass");
+        if (count) Require(out[0].shooter == 1234 && Near(out[0].distance,distance) &&
+            Near(out[0].strength,DistanceScale(distance,kMagicRange)), "Beam loses source identity or distance weighting");
+        tracker.ObserveBeam(beam);
+        Require(tracker.Drain(10,out) == 0, "A repeated native beam contact repeats noise");
+        tracker.Reset(); tracker.Publish(view,42,{},20); beam.time = 20;
+        beam.to = {-200,distance,0}; tracker.ObserveBeam(beam);
+        Require(tracker.Drain(20,out) == 0, "A beam extends through an earlier wall contact");
+        tracker.Reset(); tracker.Publish(view,42,{},30); beam.time = 30;
+        beam.to = {1000,distance,0}; beam.hitPlayer = true; tracker.ObserveBeam(beam);
+        Require(tracker.Drain(30,out) == 0, "A direct lightning hit also triggers near-miss noise");
+        tracker.Reset(); tracker.Publish(view,42,{},40); beam.time = 40; beam.hitPlayer = false;
+        beam.to.x = std::numeric_limits<float>::quiet_NaN(); tracker.ObserveBeam(beam);
+        beam.to.x = 1000; tracker.ObserveBeam(beam);
+        Require(tracker.Drain(40,out) == count, "Invalid beam geometry poisons a subsequent valid contact");
+        tracker.Publish(1-view,42,{},40.01); beam.time = 40;
+        tracker.ObserveBeam(beam);
+        Require(tracker.Drain(40.01,out) == 0, "A beam from the previous view crosses the POV handoff");
+    }
+}
+
 static void MagicFlights()
 {
     // SPEL -> MGEF -> PROJ fixtures from the locally audited game records.
@@ -318,8 +356,113 @@ static void RateAndResets()
             "A volley exceeds fixed storage or repeats already drained passes");
 }
 
+
+static void CompletedFlightGaps()
+{
+    for (int completion = 0; completion < 3; ++completion) for (int gap = 0; gap < 4; ++gap) {
+        Tracker tracker(kMagicRange);
+        std::array<Pass,64> out;
+        const Identity projectile{1,1001};
+        tracker.Publish(0,42,{},100);
+        tracker.Observe(projectile,{-100,40,0},0,100,false);
+        // A passed shot, a scenery contact before passing, or a direct player
+        // hit all finish this projectile's opportunity to create flyby noise.
+        tracker.Observe(projectile,{completion == 0 ? 100.0f : -50.0f,40,0},.01f,100.01,
+                        false,completion != 0,completion == 2);
+        Require(tracker.Drain(100.01,out) == (completion == 0 ? 1u : 0u), "Invalid completed-flight fixture");
+        if (gap == 0) {
+            // Camera keeps ticking while a settled projectile stops updating.
+            for (int frame = 1; frame <= 180; ++frame) tracker.Publish(0,42,{},100.01+frame/60.0);
+        } else if (gap == 1) {
+            tracker.Publish(0,42,{},103.01); // a camera stall discards its tails
+        } else if (gap == 2) {
+            tracker.Publish(1,42,{},100.02); // POV handoff, same live projectile
+        } else {
+            tracker.Publish(0,42,{10000,0,0},100.02); // listener teleport
+        }
+        const double now = gap < 2 ? 103.02 : 100.03;
+        const int view = gap == 2 ? 1 : 0;
+        tracker.Publish(view,42,{-25,0,90},now);
+        tracker.Observe(projectile,{0,0,0},float(now-100),now,false);
+        tracker.Publish(view,42,{25,0,90},now+.01);
+        // A body nudges an attached projectile by 0.02 units as the listener
+        // walks over it. Relative closest approach alone resembles a flyby.
+        tracker.Observe(projectile,{.02f,0,0},float(now-100+.01),now+.01,false);
+        Require(tracker.Drain(now+.01,out) == 0,
+                "Completed/impacted projectile rearms after an observation or camera gap");
+    }
+
+    Tracker unfinished;
+    std::array<Pass,64> out;
+    unfinished.Publish(0,42,{},10);
+    unfinished.Observe({2,2},{-100,30,0},0,10,false);
+    for (int frame = 1; frame <= 30; ++frame) unfinished.Publish(0,42,{},10+frame/60.0);
+    unfinished.Observe({2,2},{100,30,0},.5f,10.5,false);
+    Require(unfinished.Drain(10.5,out) == 0, "An unobserved interval becomes a fictional crossing");
+    unfinished.Observe({2,2},{-100,30,0},.51f,10.51,false);
+    Require(unfinished.Drain(10.51,out) == 1, "A fresh observed pass is lost after reseeding unfinished flight");
+
+    Tracker beam(kMagicRange);
+    beam.Publish(0,42,{},20);
+    BeamContact contact{{3,3},{-100,30,0},{100,30,0},0,20,1234,5678};
+    beam.ObserveBeam(contact);
+    Require(beam.Drain(20,out) == 1, "Invalid completed-beam fixture");
+    for (int frame = 1; frame <= 30; ++frame) beam.Publish(0,42,{},20+frame/60.0);
+    contact.livingTime = .5f; contact.time = 20.5;
+    beam.ObserveBeam(contact);
+    Require(beam.Drain(20.5,out) == 0, "A delayed callback repeats the same completed beam");
+}
+
+
+static void CosmeticBloodSpray()
+{
+    for (std::uint32_t slot : {0u,0x08Cu,0xA21u}) {
+        CosmeticProjectiles cosmetic;
+        cosmetic.Resolve([&](std::uint32_t local, std::string_view plugin) {
+            Require(plugin == "Dismembering Framework.esm", "Cosmetic lookup names the wrong plugin");
+            return 0xFE000000u | (slot << 12) | local;
+        });
+        const auto spray = 0xFE000000u | (slot << 12) | 0x80Eu;
+        const auto trace = 0xFE000000u | (slot << 12) | 0x810u;
+        Require(cosmetic.Contains(spray) && cosmetic.Contains(trace) && !cosmetic.Contains(0) &&
+                !cosmetic.Contains(0x1200080Eu) && !cosmetic.Contains(spray+1),
+                "Blood-spray exclusion depends on load order or catches unrelated records");
+        for (int view : {0,1}) for (int fixture = 0; fixture < 3; ++fixture) {
+            // Actual DF 1.2.2 metadata: a visible missile and an invisible cone,
+            // both fire-and-forget spells with collision/visual flag 0x200.
+            // A real firebolt with the same nearby trajectory remains audible.
+            const std::uint32_t base = fixture == 0 ? spray : fixture == 1 ? trace : 0x0001C172u;
+            const MagicProjectile magic{1,2,0,std::uint16_t(fixture == 1 ? 16 : 1),512,cosmetic.Contains(base)};
+            Tracker tracker(kMagicRange);
+            std::array<Pass,64> out;
+            std::size_t count = 0;
+            for (int emission = 0; emission < 12; ++emission) for (int tick = 0; tick <= 12; ++tick) {
+                const float age = tick/60.0f;
+                const double now = 10+emission*.3+age;
+                tracker.Publish(view,42,{},now);
+                // The reported session recycles references and resets lifetime
+                // for fresh blood particles. Deduplication must allow that for
+                // genuine spells; classification must silence the cosmetics.
+                if (magic.Travels()) tracker.Observe({1,1001},{-35+350*age,80,0},age,now,false);
+                count += tracker.Drain(now,out);
+            }
+            Require(count == (fixture == 2 ? 12u : 0u),
+                    "Cosmetic blood emits camera noise or a genuine incoming spell is silenced");
+        }
+    }
+    CosmeticProjectiles absent;
+    absent.Resolve([](std::uint32_t, std::string_view) { return 0u; });
+    Require(!absent.Contains(0) && !absent.Contains(0xFE08C80Eu) && !absent.Contains(0x12000810u),
+            "Missing optional framework disables unrelated projectile effects");
+    Require(MagicProjectile{1,2,0,1,512}.Travels() && MagicProjectile{1,2,0,4,512}.DiscreteBeam(),
+            "Existing utility spells or beams require the optional framework");
+}
+
 int main() try
 {
+    CosmeticBloodSpray();
+    CompletedFlightGaps();
+    MagicBeams();
     Geometry(); FlightAndContacts(); RateAndResets(); NativeArrowVelocity(); CinematicOutput();
     MagicFlights(); IndependentSourcesAndWaves(); DifferentRadii();
     std::cout << "Projectile flyby checks passed\n";

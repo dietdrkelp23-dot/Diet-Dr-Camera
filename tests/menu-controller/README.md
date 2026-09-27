@@ -58,7 +58,9 @@ The readability checks require each binding and its explanation to remain inside
 the same outlined group, with no text overlap and a compact, uniform gap of at
 least eight pixels between neighboring groups. Responsive layouts reuse the
 original footer dimensions.
-Labels distinguish entry/tab/override copying, slider cancel/coarse steps, and
+Labels distinguish entry/tab/override copying, including Paste Entry to All
+for a single entry over a tab versus Paste Entire Tab for a copied tab.
+Both labels are included in the fixed fitting budget. They also describe slider cancel/coarse steps, and
 stick clicks from stick movement used for scrolling.
 
 Position checks compare centering, row assignments and font sizes across every
@@ -97,6 +99,25 @@ fields used by capture and the footer. Capture is enabled only for ImGui 1.90.8;
 retain the existing navigation-flag fallback without accessing those internals.
 Footer replacement also stays disabled for other ImGui versions.
 
+The native navigation fixture also reproduces short auto-sized entry lists next
+to sliders registered directly in the parent window, matching Categories and
+other editors. Lower sliders enter the list with one horizontal step and return
+to the same row. Checks cover 0/1/3/6 entries, mirrored layouts and four UI scales;
+existing dense/sparse table lists, footer routing and scrolling remain covered.
+The fixture includes a real category tab strip, Outdoor/Indoor selectors and a
+Transitions toolbar button. Each tab moves to the control nearest its column,
+with reverse movement retaining that column. A toggle above a list enters the
+list; placing the editor beneath it instead reaches an editor control. Empty
+lists expose the nearby action below them. Horizontal editor return cannot jump
+to distant headers. Pure checks cover offset headers, nested container edges,
+window ownership, unavailable rows, modal layers, and a nearby control beating
+a short list above it. Navigation otherwise follows geometry. Vanity Camera explicitly links its tab
+to the leading Disable Vanity Camera toggle, with Up returning to that tab.
+The native fixture verifies that route at all four scales, with vanity enabled
+and disabled, including onward movement to the slider and unchanged horizontal
+tab movement. Pure checks require missing, clipped, foreign-window and
+foreign-layer entry targets to fall back to ordinary spatial navigation.
+
 These checks do not render DDC's full menu or exercise XInput, Skyrim, or the
 installed framework DLL. Confirm that choosing a section keeps controller focus
 in the list and Right shows the cursor in its controls. Check D-pad movement,
@@ -109,3 +130,7 @@ own clipboard contents; tab and environment buttons should identify theirs.
 Target Lock's General tab must have no clipboard hints or right-click clipboard
 menu, and Copy/Paste must not act on the previous controller target after moving
 onto General.
+
+The native navigation fixture also checks the inline Apply/Reset pair and all
+four Apply scope choices plus Cancel. Popup navigation stays in its own modal
+layer across the four tested UI scales and both supported input layouts.

@@ -18,6 +18,12 @@ namespace DietDrCamera
         static constexpr float kMaxCorrection = 0.0436332313f;  // 2.5 degrees
         static constexpr float kTrackingDuration = 0.30f;
 
+        // Advance lock interpolation in elapsed seconds, including on foot.
+        static float FrameTime(float dt)
+        {
+            return std::isfinite(dt) ? std::clamp(dt, 0.0f, 0.05f) : 0.0f;
+        }
+
         static float TrackingDuration(float configured, bool mounted)
         {
             return mounted ? (std::max)(configured, kTrackingDuration) : configured;

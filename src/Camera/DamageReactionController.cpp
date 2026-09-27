@@ -103,20 +103,42 @@ namespace DietDrCamera::DamageReactionController
                     return;
                 }
                 const auto* base = effect->GetBaseObject();
-                if (!base || !Reaction::IsHarmfulEffectTick(amount, base->IsHostile(), base->IsDetrimental(),
-                    value == RE::ActorValue::kHealth)) {
+                constexpr bool dual = std::is_same_v<Effect, RE::DualValueModifierEffect>;
+                int secondary = -1;
+                float secondaryWeight = 0;
+                if constexpr (dual) {
+                    const auto* dualEffect = static_cast<const RE::DualValueModifierEffect*>(effect);
+                    secondary = static_cast<int>(dualEffect->GetAdditionalActorValue());
+                    secondaryWeight = dualEffect->GetSecondaryAVWeight();
+                }
+                if (!base || !Reaction::IsHarmfulValueApplication(amount, base->IsHostile(), base->IsDetrimental(),
+                    static_cast<int>(value), static_cast<int>(effect->actorValue), dual, secondary, secondaryWeight)) {
+                    original(effect, target, amount, value);
+                    return;
+                }
+                const auto caster = effect->GetCasterActor();
+                static_assert(static_cast<int>(RE::MagicSystem::SpellType::kDisease) == 1);
+                static_assert(static_cast<int>(RE::MagicSystem::SpellType::kAbility) == 4);
+                static_assert(static_cast<int>(RE::MagicSystem::SpellType::kAddiction) == 10);
+                const int spellType = effect->spell ? static_cast<int>(effect->spell->GetSpellType()) : -1;
+                if (!Reaction::IsIncomingValueSource(spellType, caster.get() == target)) {
                     original(effect, target, amount, value);
                     return;
                 }
                 const auto token = inbox.Token();
                 if (!token) { original(effect, target, amount, value); return; }
-                const auto caster = effect->GetCasterActor();
                 auto hit = Snapshot(target, caster.get());
                 hit.kind = MagicKind(base);
                 hit.origin = Reaction::Contact::Origin::Effect;
                 hit.source = effect->spell ? effect->spell->GetFormID() : base ? base->GetFormID() : 0;
                 hit.sustained = effect->duration > 0 ||
                     (base && base->data.castingType == RE::MagicSystem::CastingType::kConcentration);
+                if (hit.kind == Reaction::Kind::Shock) {
+                    static std::atomic<unsigned> logged{0};
+                    if (logged.fetch_add(1, std::memory_order_relaxed) < 12)
+                        spdlog::info("[DAMAGE-EFFECT] shock source={:08X} requestedAV={} storedAV={} secondaryAV={} sustained={}",
+                            hit.source, static_cast<int>(value), static_cast<int>(effect->actorValue), secondary, hit.sustained);
+                }
                 {
                     CaptureScope scope;
                     original(effect, target, amount, value);
@@ -133,7 +155,8 @@ namespace DietDrCamera::DamageReactionController
         {
             RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* event, RE::BSTEventSource<RE::TESHitEvent>*) override
             {
-                if (!event || !event->target || !event->target->IsPlayerRef()) return RE::BSEventNotifyControl::kContinue;
+                if (!event || !event->target || !event->target->IsPlayerRef() || event->cause == event->target)
+                    return RE::BSEventNotifyControl::kContinue;
                 const auto token = inbox.Token();
                 if (!token) return RE::BSEventNotifyControl::kContinue;
                 auto* source = event->source ? RE::TESForm::LookupByID(event->source) : nullptr;
@@ -311,9 +334,9 @@ namespace DietDrCamera::DamageReactionController
             if (logged < 24) {
                 ++logged;
                 const auto axes = Reaction::ContactDirection(contacts[i], basis, fp);
-                spdlog::info("[DAMAGE-REACTION] impact view={} kind={} intensity={:.2f} power={} blocked={} sustained={} source={:08X} direction=({:.2f},{:.2f},{:.2f}) recoilAxes=({:.3f},{:.3f},{:.3f})",
+                spdlog::info("[DAMAGE-REACTION] impact view={} kind={} intensity={:.2f} power={} blocked={} sustained={} attacker={:08X} source={:08X} direction=({:.2f},{:.2f},{:.2f}) recoilAxes=({:.3f},{:.3f},{:.3f})",
                     fp ? "1p" : "3p", Reaction::KindName(contacts[i].kind), tuning.intensity, contacts[i].power, contacts[i].blocked, contacts[i].sustained,
-                    contacts[i].source, contacts[i].towardSource.x, contacts[i].towardSource.y, contacts[i].towardSource.z,
+                    contacts[i].attacker, contacts[i].source, contacts[i].towardSource.x, contacts[i].towardSource.y, contacts[i].towardSource.z,
                     axes.pitch, axes.yaw, axes.roll);
             }
         }

@@ -1,22 +1,27 @@
-DIET DR CAMERA 1.2.0
+OMNICAM 1.3.0
 
 Prepared for the existing mod page:
 https://www.nexusmods.com/skyrimspecialedition/mods/191847
 
-Main ZIP: Desktop/Diet Dr Camera - Mod/Diet Dr Camera.zip
-Source ZIP: Desktop/Diet Dr Camera - Source/Diet Dr Camera - Source.zip
-Enter version 1.2.0 for both files. Upload the ZIPs directly.
-The timestamped release candidate retains versioned archive names and hashes.
+Main ZIP: OmniCam-1.3.0.zip
+Source ZIP: OmniCam - Source-1.3.0.zip
+Page artwork: OmniCam Thumbnail.png (in the release delivery folder)
+Enter version 1.3.0 for both files. Upload the ZIPs directly to Files and use
+the PNG as page artwork. SHA256SUMS.txt identifies the delivered assets.
 
 UPLOAD INSTRUCTIONS.txt gives the file descriptions and update steps.
-CHANGELOG-1.2.0.txt is ready for the version changelog.
+CHANGELOG-1.3.0.txt is ready for the version changelog.
+Description - Nexus BBCode.txt contains current features and support guidance.
+Requirements - Nexus BBCode.txt contains the requirements.
 LOGS AND SUPPORT.txt is ready to paste into a support post.
-Description - Nexus BBCode.txt contains updated features and support guidance.
 
-Both the DLL and source must come from this same release candidate. Existing
-presets are not bundled or overwritten. Detailed compatibility evidence and
-remaining coverage are recorded in RUNTIME-SUPPORT.md and RELEASE-CHECKLIST.md
-inside the source ZIP. This preparation does not publish files or a GitHub tag.
+Both DLL and source must come from the same release candidate. Existing presets
+are not bundled or overwritten. New presets use format 17; older-format presets
+remain readable. No preset folder migration or reset is required.
 
-SECURITY-REVIEW.txt is the historical 1.0/1.1.1 correspondence draft; its links
-and statements are not version 1.2.0 release evidence.
+Compatibility evidence and remaining gameplay coverage are recorded in
+RUNTIME-SUPPORT.md and RELEASE-CHECKLIST.md inside the source ZIP.
+This preparation does not publish files, send support messages or create a tag.
+
+SECURITY-REVIEW.txt is historical 1.0/1.1.1 correspondence; its links and
+statements are not version 1.3.0 release evidence.

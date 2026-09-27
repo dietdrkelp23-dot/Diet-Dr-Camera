@@ -19,6 +19,7 @@
 #include "Settings/MeleeWeaponOverrides.h"
 #include "Settings/ItemBindingIdentity.h"
 #include "Core/CombatFraming.h"
+#include "Core/CombatFOV.h"
 #include "Core/CinematicViews.h"
 
 #include <vector>
@@ -169,6 +170,7 @@ namespace DietDrCamera
 
         // Cinematic effects (Extras → Cinematic Effects).
         CombatFraming::Tuning combatFraming{};
+        CombatFOV::Tuning combatFov{};
         // Deferred feature: preserve stored definitions without activating them.
         std::vector<CinematicViews::View> cinematicViews;
         // Dragons — five independent shake triggers fired by nearby
@@ -857,6 +859,9 @@ namespace DietDrCamera
         // guaranteed-execution testing toggle — REMOVED 2026-08-17. Old
         // presets' killcam_* keys are ignored on load.)
 
+        // Keep the regular gameplay view instead of entering the native camera.
+        bool disableDeathCamera = false;
+        bool disableRagdollCamera = false;
         float deathCameraFov          = 90.0f;   // 40..140
         float deathCameraHoldDuration = 5.0f;    // seconds, 1..30, vanilla ~5
         // When true, deathCameraHoldDuration is ignored — the bleedout
@@ -912,6 +917,8 @@ namespace DietDrCamera
         // Always on — the dialogue camera (both POVs) no longer has an
         // enable toggle; these are forced true (load is ignored).
         bool          dialogueEnabled            = true;
+        // Optional DBVO 2 player reverse shot; true preserves existing presets.
+        bool          dialogueDBVOCameraSwitching = true;
         // Legacy single-profile field. Still loaded from old configs so we
         // can migrate it into the new dialogueBuckets system. New code
         // should read from dialogueBuckets / activeDialogueLook instead.

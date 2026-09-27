@@ -108,6 +108,82 @@ int main()
                 MakeTabEntryKey("Vampire Lord Unsheathed (Ground)", 0)}).empty(),
             "Tab base aliases merged distinct transformation states");
 
+        // One copied camera entry broadcasts across the entire destination tab,
+        // regardless of labels, row order or environment. An unrelated tab and
+        // incompatible settings must remain untouched.
+        struct BroadcastEntry {
+            EntryClipKind kind = EntryClipKind::Camera;
+            CameraProfile profile{};
+            std::array<CameraProfile, 2> overrides{};
+        };
+        struct BroadcastTarget {
+            EntryClipKind kind;
+            const char* label;
+            int environment;
+            BroadcastEntry value{};
+            bool enabled = false;
+        };
+        BroadcastEntry single{EntryClipKind::Camera, TunedProfile(61.0f),
+            {TunedProfile(62.0f), TunedProfile(63.0f)}};
+        const auto originalSingle = single;
+        std::array<BroadcastTarget, 5> allRows{{
+            {EntryClipKind::Camera, "Sprinting", 1},
+            {EntryClipKind::Noise, "Noise", 0},
+            {EntryClipKind::Camera, "Power Attack / Left", 0},
+            {EntryClipKind::Transitions, "Transitions", 0},
+            {EntryClipKind::Camera, "Disabled Shout", 1}}};
+        std::array<BroadcastTarget*, 5> destinations{};
+        for (std::size_t i = 0; i < allRows.size(); ++i) destinations[i] = &allRows[i];
+        BroadcastTarget otherTab{EntryClipKind::Camera, "Sheathed", 0};
+        const auto compatible = [](const auto& copied, const auto* target) {
+            return CanBroadcastEntryToTab(copied.kind, target->kind);
+        };
+        const auto broadcastCount = BroadcastEntryToTab(single, destinations, compatible,
+            [&](const auto& copied, auto* target) {
+                target->value = copied;
+                target->enabled = true;
+                // Recursive clipboard operations can replace the live payload.
+                single.profile = TunedProfile(-91.0f);
+                return true;
+            });
+        Require(broadcastCount == 3, "Single-entry tab paste skipped rows or included unrelated kinds");
+        for (const auto& row : allRows) {
+            if (row.kind == EntryClipKind::Camera) {
+                RequireProfile(row.value.profile, originalSingle.profile);
+                RequireProfile(row.value.overrides[0], originalSingle.overrides[0]);
+                RequireProfile(row.value.overrides[1], originalSingle.overrides[1]);
+                Require(row.enabled, "Pasted gated row did not become enabled");
+            } else {
+                RequireProfile(row.value.profile, CameraProfile{});
+                Require(!row.enabled, "Broadcast touched an incompatible setting");
+            }
+        }
+        RequireProfile(otherTab.value.profile, CameraProfile{});
+        Require(!otherTab.enabled, "Entry broadcast escaped its target tab");
+        Require(CanBroadcastEntryToTab(EntryClipKind::Noise, EntryClipKind::Noise) &&
+            CanBroadcastEntryToTab(EntryClipKind::FirstPerson, EntryClipKind::FirstPerson) &&
+            CanBroadcastEntryToTab(EntryClipKind::Transitions, EntryClipKind::Camera) &&
+            CanBroadcastEntryToTab(EntryClipKind::LocationOv, EntryClipKind::Camera) &&
+            CanBroadcastEntryToTab(EntryClipKind::EnemyOv, EntryClipKind::Camera),
+            "Entry broadcast rejected an existing row-paste route");
+        Require(!CanBroadcastEntryToTab(EntryClipKind::Camera, EntryClipKind::Noise) &&
+            !CanBroadcastEntryToTab(EntryClipKind::FirstPerson, EntryClipKind::Camera) &&
+            !CanBroadcastEntryToTab(EntryClipKind::Tab, EntryClipKind::Camera) &&
+            !CanBroadcastEntryToTab(EntryClipKind::None, EntryClipKind::None),
+            "Entry broadcast permitted incompatible or whole-tab payloads");
+        unsigned incompatibleCalls = 0;
+        BroadcastEntry noiseSource{EntryClipKind::Noise};
+        std::array<BroadcastTarget*, 1> cameraOnly{&otherTab};
+        Require(BroadcastEntryToTab(noiseSource, cameraOnly, compatible,
+            [&](const auto&, auto*) { ++incompatibleCalls; return true; }) == 0 && incompatibleCalls == 0,
+            "Incompatible tab paste mutated a destination before rejecting it");
+        Require(BroadcastEntryToTab(originalSingle, cameraOnly, compatible,
+            [](const auto&, auto*) { return false; }) == 0,
+            "Rejected row paste counted as a successful tab paste");
+        const std::array<BroadcastTarget*, 0> emptyTab{};
+        Require(BroadcastEntryToTab(originalSingle, emptyTab, compatible,
+            [](const auto&, auto*) { return true; }) == 0, "Empty tab reported a successful paste");
+
         struct LocationSlot { int locIdx; float tuning; };
         std::vector<LocationSlot> locations{{0, 12.0f}, {1, 24.0f}, {2, 36.0f}, {-1, 48.0f}};
         RemapTabLocationSlots(locations, {2, -1, 0});

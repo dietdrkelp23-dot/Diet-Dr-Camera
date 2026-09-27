@@ -1,4 +1,6 @@
-[size=5][b]Diet Dr Camera[/b][/size]
+[size=5][b]OmniCam - Customizable Camera Overhaul[/b][/size]
+
+Formerly Diet Dr Camera. Existing presets and settings remain compatible.
 
 A configurable camera overhaul for Skyrim with per-state framing, smooth transitions,
 first-person FOV and effects, dialogue and menu cameras, and shareable presets.
@@ -11,27 +13,32 @@ Configure the camera in game through SKSE Menu Framework and Quick Tune.
 [*]Camera noise and projectile Repulse, with optional target-lock integration.
 [*]Separate nearby NPC Magic, Melee, Archery, Shouts and Transformations noise in both views.
 [*]Player Hit Shake for melee, arrows, bolts and spell/staff missile impacts, with Strength, Speed, Bounce and Texture controls.
-[*]Dialogue, menu, death and ragdoll cameras.
+[*]Dialogue, menu, death and ragdoll cameras, with optional DBVO 2 player framing through the voiced response.
+[*]Disable Death Camera and Disable Ragdoll Camera toggles keep the normal gameplay camera and looking controls, including the compass and TDM lock/unlock/target switching. Slow Motion remains available independently. Both toggles default off; death duration and the skip hotkey remain available.
+[*]Disabled Vanity Camera hides its remaining settings, with direct controller navigation from the tab to its toggle. Rapidly repeated shouts, including full three-word Whirlwind Sprint, blend their camera noise smoothly.
 [*]Replacement Vanity Camera that stays active while you look around.
 [*]Flee Framing keeps the player in frame when running towards the camera.
 [*]Horseback Drawing/Zoomed profiles and stabilized mounted target tracking.
 [*]Ritual staff entries for mod-added spells across all five schools, including sneaking and target lock.
 [*]Separate indoor/outdoor collision options for ground, doors, trees and walls.
-[*]Preset saving, sharing, whole-tab copy/paste and controller navigation. Sheathed and Unsheathed base rows copy in either direction.
+[*]Preset saving and sharing, whole-tab copy/paste, and Paste Entry to All for applying one entry across a compatible tab. Sheathed and Unsheathed base rows copy in either direction.
+[*]Controller and arrow navigation follows nearby visible controls, with clipboard hints that match the copied content.
+[*]Apply beside Reset on main category sliders copies only that value across a tab, matching Indoor or Outdoor profiles, or the whole section, with separate choices to include overrides. Override and Specific Weapons/Animations editors keep Reset only; All Tabs still includes existing specific entries.
 [*]Click slider values to type exact numbers, with immediate yellow selection.
 [*]Per-entry Target Lock Height, Zoom, FOV and Pitch Bias adjust framing as enemies approach.
-[*]Damage Reaction for incoming weapon, creature and magic hits, with separate intensity for each view.
-[*]Proximity-based arrow, bolt and magic flyby noise. Magic has a wider radius and stronger motion.
+[*]Damage Reaction for incoming weapon, creature and magic hits, with separate intensity for each view. Passive vampire sunlight and self-applied effects no longer trigger repeated jolts.
+[*]Proximity-based arrow, bolt and magic flyby noise. Magic has a wider radius and stronger motion. Dismembering Framework cosmetic blood is excluded.
+[*]Combat FOV blends to a chosen FOV when combat begins and returns afterward. FOV and Transition Speed controls preview live in the menu and stay hidden until enabled.
 [*]Crowd Modifier adjusts third-person zoom and FOV around engaged enemies; disabled while paragliding.
 [*]Independent First Person and Third Person Projectile Tracing settings.
 [*]Automatic startup diagnostics and three retained previous logs for compatibility reports.
 [/list]
 
-[b]DIET DR CAMERA 1.2.0 - REQUIREMENTS[/b]
+[b]OMNICAM 1.3.0 - REQUIREMENTS[/b]
 
 Windows x64, Skyrim Special Edition / Anniversary Edition.
 One DLL targets the known SE/AE executable versions listed in RUNTIME-SUPPORT.md,
-including 1.5.97, Steam/GOG 1.6 and Steam 1.7 through 1.7.104. These are implemented
+starting at SE 1.5.97, with Steam/GOG 1.6 and Steam 1.7 through 1.7.104. These are implemented
 targets; full gameplay testing across every runtime has not been completed.
 Skyrim VR, Microsoft Store/Game Pass and Epic builds are not supported.
 
@@ -70,26 +77,31 @@ Identifies active replacement animations for animation camera profiles.
 Without it, animation profiles use raw animation paths.
 [url=https://www.nexusmods.com/skyrimspecialedition/mods/92109]https://www.nexusmods.com/skyrimspecialedition/mods/92109[/url]
 
+Dragonborn Voice Over (DBVO) 2: optional voiced player dialogue integration.
+Enable Camera Switching (Requires DBVO 2) in Dialogue > Global to frame the
+player during choices and voice playback. Turn it off to keep framing on the
+NPC. It has no effect without DBVO 2. Install DBVO and its voice content separately.
+
 [b]INSTALLATION[/b]
 
-Install Diet Dr Camera-1.2.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
+Install OmniCam-1.3.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
 Open SKSE Menu Framework with its configured shortcut (upstream default F1),
-then select Diet Dr Camera. Save your tuning to a named preset in the Presets panel.
+then select OmniCam. Save your tuning to a named preset in the Presets panel.
 The main archive contains only the DLL and the empty stagger-camera animation
 required by the mod. It does not overwrite personal presets.
 
-SkyUI is not required by DDC. There is no ESP, MCM, or Papyrus script component.
+SkyUI is not required by OmniCam. There is no ESP, MCM, or Papyrus script component.
 CommonLibSSE-NG and the C++ libraries are compiled in; players do not install them.
 The Source ZIP is for developers and license compliance, not installation in MO2.
-Use one third-person camera overhaul; SmoothCam and DDC overlap.
-Use one camera-noise implementation; Camera Noise SE and DDC overlap.
+Use one third-person camera overhaul; SmoothCam and OmniCam overlap.
+Use one camera-noise implementation; Camera Noise SE and OmniCam overlap.
 
 The installation/compatibility guide, credits and license files are in the
 Source ZIP, available on the same mod page.
 
 [b]Compatibility and release status[/b]
 Use one third-person camera overhaul and one camera-noise implementation.
-SmoothCam and Camera Noise SE overlap with DDC. Other dialogue, death-camera and
+SmoothCam and Camera Noise SE overlap with OmniCam. Other dialogue, death-camera and
 unpaused-menu mods may also overlap. Improved Camera has specific FOV integration,
 but every combination has not been verified.
 
@@ -104,13 +116,13 @@ Precision. Projectile Hit Shake applies to direct actor hits and becomes softer
 with distance; scenery hits, beams and lingering damage do not trigger it.
 
 [b]Startup errors and logs[/b]
-Version 1.2.0 records Skyrim/SKSE versions, Address Library details, loaded DLLs
+Version 1.3.0 records Skyrim/SKSE versions, Address Library details, loaded DLLs
 and the exact failed hook check automatically. If startup fails, attach the
-complete DietDrCamera.log and skse64.log from the same launch, the full error
+complete OmniCam.log and skse64.log from the same launch, the full error
 message and a Crash Logger report if one was generated. Verbose Logging is not
 required. Find logs in Documents/My Games/Skyrim Special Edition/SKSE, or
 Skyrim Special Edition GOG/SKSE for GOG. Use your redirected Documents folder
-if applicable. DDC keeps three earlier sessions as DietDrCamera.1.log through
+if applicable. OmniCam keeps three earlier sessions as OmniCam.1.log through
 .3.log. Hook errors include the actual path if fallback logging was needed.
 Logs stay local until you choose to share them. Other-runtime compatibility
 is still being investigated; extra logging does not establish a fix by itself.
@@ -119,18 +131,20 @@ is still being investigated; extra logging does not establish a fix by itself.
 Save your tuning to a named preset in the Presets panel. The main download contains
 no personal preset files. Public preset compatibility begins with 1.0; later updates
 must preserve existing tuning and defaults. See PRESET-AUTHORS.md before sharing
-presets on Nexus. Keep a backup of your personal presets when updating.
+presets on Nexus. Keep a backup of your personal presets when updating. Existing
+preset files and folders stay valid; newly saved format-17 presets require 1.3.0
+or another build that supports that format.
 
 [b]License and source[/b]
 The matching source ZIP includes BUILDING.md with complete build instructions.
 GPL-3.0-or-later with modding/linking permissions; see LICENSING.md in the source download.
-The matching [b]Diet Dr Camera - Source-1.2.0.zip[/b] is in this page's Files section.
+The matching [b]OmniCam - Source-1.3.0.zip[/b] is in this page's Files section.
 It includes source, dependency sources, build recipes and tests. Players only need
 the main download. Third-party components retain their own terms.
 
-[b]DIET DR CAMERA - FULL CREDITS[/b]
+[b]OMNICAM - FULL CREDITS[/b]
 
-Diet Dr Camera builds on the tools, interfaces, research, and shared source of the Skyrim modding community. Thank you to the following authors and projects.
+OmniCam builds on the tools, interfaces, research, and shared source of the Skyrim modding community. Thank you to the following authors and projects.
 
 [b]FOUNDATIONS AND IN-GAME INTERFACE[/b]
 
@@ -202,11 +216,11 @@ the dialogue input-event relabel approach used for movement during dialogue.
 [url=https://www.nexusmods.com/skyrimspecialedition/mods/43708]https://www.nexusmods.com/skyrimspecialedition/mods/43708[/url]
 
 SniffleMan, Vermunds, and Skyrim Souls RE contributors - Skyrim Souls RE
-unpaused-menu hooks and menu-view caching work adapted by Diet Dr Camera.
+unpaused-menu hooks and menu-view caching work adapted by OmniCam.
 [url=https://github.com/Vermunds/SkyrimSoulsRE]https://github.com/Vermunds/SkyrimSoulsRE[/url]
 
 Ersh - No Furniture Camera
-the furniture-camera suppression work adapted by Diet Dr Camera.
+the furniture-camera suppression work adapted by OmniCam.
 [url=https://github.com/ersh1/NoFurnitureCamera]https://github.com/ersh1/NoFurnitureCamera[/url]
 
 The Free Death Camera authors and contributors - Free Death Camera
@@ -229,9 +243,9 @@ NasGorTelorCeplok, MaskedRPGFan, and the Alternate Conversation Camera contribut
 reference work on conversation camera framing and rotation.
 [url=https://www.nexusmods.com/skyrimspecialedition/mods/68210]https://www.nexusmods.com/skyrimspecialedition/mods/68210[/url]
 
-Special thanks to the SKSE and CommonLib communities for documenting Skyrim's engine, and to everyone who tested Diet Dr Camera, reported bugs, shared logs, or helped track down camera edge cases.
+Special thanks to the SKSE and CommonLib communities for documenting Skyrim's engine, and to everyone who tested OmniCam, reported bugs, shared logs, or helped track down camera edge cases.
 
 Third-party components retain their own licenses. License files and notices are included in the source download. Projects credited for research or inspiration are acknowledgements, not additional installation requirements.
 
-DDC is GPL-3.0-or-later with modding/linking permissions. See LICENSING.md.
+OmniCam is GPL-3.0-or-later with modding/linking permissions. See LICENSING.md.
 The source download contains the exact dependency sources, recipes and patches.

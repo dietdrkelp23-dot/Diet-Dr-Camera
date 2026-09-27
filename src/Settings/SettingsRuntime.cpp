@@ -2,6 +2,7 @@
 #include "Settings/SettingsManager.h"
 #include "Camera/HitShakeController.h"
 #include "Camera/DamageReactionController.h"
+#include "Camera/CombatFOVController.h"
 #include "UI/CrosshairManager.h"
 
 namespace DietDrCamera
@@ -10,6 +11,7 @@ namespace DietDrCamera
     {
         HitShakeController::Reset();
         DamageReactionController::Reset();
+        CombatFOVController::Reset();
         CrosshairManager::GetSingleton().ResetTracing();
         // Push engine-global settings eagerly so they're in place before
         // any event can read them â€” notably fPlayerDeathReloadTime, which

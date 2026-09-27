@@ -1,7 +1,10 @@
 #include "PCH.h"
 #include "Hooks/RuntimeHooks.h"
+#include "Hooks/RuntimePatchInspection.h"
+#include "Core/Diagnostics.h"
 #include <chrono>
 #include "Camera/VanityCamera.h"
+#include "Camera/BleedoutCameraOverride.h"
 #include <array>
 #include <unordered_set>
 #include <Windows.h>
@@ -16,6 +19,7 @@
 #include "Camera/AnimationCameraController.h"
 #include "Camera/BleedoutFreeLook.h"
 #include "Camera/CameraController.h"
+#include "Camera/CombatFOVController.h"
 #include "Camera/CameraCollision.h"
 #include "Camera/FleeFraming.h"
 #include "Camera/TargetLockPreview.h"
@@ -701,34 +705,9 @@ namespace DietDrCamera
         bool s_forceCasterPatchForDeathFreeLook = false;
         BleedoutFreeLook s_bleedoutFreeLook;
 
-        // Death-cam slow-motion envelope. Armed on BleedoutCameraState::Begin.
-        // The envelope advances on a WALL CLOCK (steady_clock) so the slowdown
-        // can't stretch its own duration, but the accumulator is PAUSED while
-        // any menu/overlay is open or the game is paused â€” so "Duration = 5"
-        // means 5 real seconds of actual running game, not wall time that also
-        // ticks through menus. Restored to normal on completion (and as a
-        // safety on End). Lives at namespace scope so the Begin trigger and the
-        // Update driver share it.
-        bool                                  s_deathSlowmoActive  = false;
-        std::chrono::steady_clock::time_point s_deathSlowmoLast{};      // prev driver-frame timestamp
-        float                                 s_deathSlowmoElapsed = 0.0f;  // accumulated RUNNING seconds
-
-        // True only when the bleedout camera was entered by an ACTUAL player death
-        // (not a recoverable ragdoll/knockdown â€” Unrelenting Force, paralysis, a
-        // giant's club, etc.). The engine routes BOTH through BleedoutCameraState,
-        // so DDC's death-cam effects + reload-time priming must run only for a real
-        // death; otherwise a mere ragdoll triggers the death cam and the load-save
-        // prompt. Set at Begin, read by the Update driver.
+        // The native camera still chooses FOV/free look by death vs knockdown.
+        // Slow motion is owned separately by BleedoutCameraOverride's event driver.
         bool s_deathCamRealDeath = false;
-
-        // Slow-mo envelope parameters captured at arm time so the shared driver in
-        // HookedBleedoutUpdate doesn't need to know whether it's a death (death-cam
-        // sliders) or a ragdoll (ragdoll sliders).
-        float s_slowmoStrengthActive = 0.0f;   // 0..90 (%)
-        float s_slowmoDurationActive = 4.0f;   // seconds
-        // Set by the ragdoll fade hotkey (input sink); the driver then eases the
-        // slow-mo back to normal early instead of waiting out the duration.
-        bool  s_slowmoFadeReq = false;
 
         // The player is in bleedout because they actually died, vs a recoverable
         // knockdown. Dead OR health fully spent reads as death; alive-with-health
@@ -743,17 +722,7 @@ namespace DietDrCamera
             return true;
         }
 
-        // Restore the global time multiplier to 1.0 and disarm the death-cam
-        // slow-mo. Safe to call when inactive.
-        void RestoreDeathSlowmo()
-        {
-            if (s_deathSlowmoActive) {
-                if (auto* timer = RE::BSTimer::GetSingleton()) {
-                    timer->SetGlobalTimeMultiplier(1.0f, true);
-                }
-                s_deathSlowmoActive = false;
-            }
-        }
+
 
 
     }
@@ -1157,7 +1126,9 @@ namespace DietDrCamera
         REL::Relocation<std::uintptr_t> horseInputVtbl{ RE::VTABLE_HorseCameraState[1] };
         _originalOrbitProcessButton = orbitInputVtbl.write_vfunc(RuntimeHooks::InputSlot(0x4), &HookedOrbitProcessButton);
         _originalHorseOrbitProcessButton = horseInputVtbl.write_vfunc(RuntimeHooks::InputSlot(0x4), &HookedOrbitProcessButton);
-        spdlog::info("HookManager: native R3 orbit reset disabled for third-person and mounted camera input");
+        REL::Relocation<std::uintptr_t> firstPersonInputVtbl{ RE::VTABLE_FirstPersonState[1] };
+        _originalFirstPersonProcessButton = firstPersonInputVtbl.write_vfunc(RuntimeHooks::InputSlot(0x4), &HookedFirstPersonProcessButton);
+        spdlog::info("HookManager: native R3 POV input disabled for first-person, third-person and mounted cameras; switching uses the shared release threshold");
 
         // HorseCameraState inherits from ThirdPersonState but has its OWN vtable.
         //
@@ -1308,7 +1279,7 @@ namespace DietDrCamera
         // dormant â€” the detour reads settings live every call.
         REL::Relocation<std::uintptr_t> casterAddr{ RELOCATION_ID(32270, 33007) };
         cameraCasterAddr = casterAddr.address();
-        std::memcpy(cameraCasterOrigBytes, reinterpret_cast<void*>(cameraCasterAddr), 6);
+        std::memcpy(cameraCasterOrigBytes.data(), reinterpret_cast<void*>(cameraCasterAddr), cameraCasterOrigBytes.size());
         spdlog::info("HookManager: CameraCaster at 0x{:x}, original bytes saved", cameraCasterAddr);
         CameraCollision::Install();
 
@@ -1324,8 +1295,16 @@ namespace DietDrCamera
             *reinterpret_cast<std::uint32_t*>(stub + 2) = 0;
             *reinterpret_cast<std::uint64_t*>(stub + 6) =
                 reinterpret_cast<std::uint64_t>(&HookManager::HookedCameraCaster);
-            cameraCasterDivertStub = reinterpret_cast<std::uintptr_t>(stub);
-            spdlog::info("HookManager: CameraCaster divert stub at 0x{:x}", cameraCasterDivertStub);
+            const auto stubAddress = reinterpret_cast<std::uintptr_t>(stub);
+            if (const auto jump = RuntimePatchInspection::RelativeJump6(cameraCasterAddr, stubAddress)) {
+                cameraCasterDivertBytes = *jump;
+                cameraCasterDivertStub = stubAddress;
+                FlushInstructionCache(GetCurrentProcess(), stub, 14);
+                spdlog::info("HookManager: CameraCaster divert stub at 0x{:x}", cameraCasterDivertStub);
+            } else {
+                spdlog::warn("HookManager: CameraCaster divert stub is outside rel32 range; "
+                             "per-layer collision exceptions will fall back to full pass-through");
+            }
         } else {
             spdlog::warn("HookManager: failed to allocate CameraCaster divert stub; "
                          "per-layer collision exceptions will fall back to full pass-through");
@@ -1335,6 +1314,7 @@ namespace DietDrCamera
         // PlayerCamera::Update (doodlum's exact site). Post-original, we
         // overlay additive Perlin noise + impulse shakes on cameraRoot->local.
         CameraNoiseController::GetSingleton().InstallHook();
+        BleedoutCameraOverride::Install();
 
         // Event-beat signal intake: Explosion::Initialize +
         // ImageSpaceModifierInstanceForm::Apply vfunc hooks. The handlers
@@ -3309,11 +3289,6 @@ namespace DietDrCamera
         s_bleedoutFreeLook.Reset();
         s_forceCasterPatchForDeathFreeLook = false;
 
-        // Safety: if a reload happened mid-slow-mo (BleedoutEnd often doesn't
-        // fire on death->reload), make sure normal time is restored now that
-        // we're back in third person.
-        RestoreDeathSlowmo();
-
         // Keep fPlayerDeathReloadTime in sync with the slider while alive, so
         // the engine doesn't start the bleedout countdown with a stale value
         // after a mid-gameplay adjustment. Writes are cheap and guarded so
@@ -3638,18 +3613,13 @@ namespace DietDrCamera
                                 // Distance-driven duration: bearing gap between the
                                 // old and new target as seen from the player.
                                 float swAng = 0.0f;
-                                if (auto op = s_camYawPrevTgt.get()) {
-                                    if (auto np = h.get()) {
-                                        const auto& pp2 = pl->GetPosition();
-                                        const auto& o = op->GetPosition();
-                                        const auto& n = np->GetPosition();
-                                        const float ob = std::atan2(o.x - pp2.x, o.y - pp2.y);
-                                        const float nb = std::atan2(n.x - pp2.x, n.y - pp2.y);
-                                        float d = nb - ob;
-                                        while (d >  3.14159265f) d -= 6.28318530f;
-                                        while (d < -3.14159265f) d += 6.28318530f;
-                                        swAng = std::abs(d);
-                                    }
+                                // Measure the remaining visible swing, even if
+                                // the previous target has died/unloaded or a
+                                // second switch interrupts the first one.
+                                if (auto np = h.get()) {
+                                    const auto delta = np->GetPosition()-trackingOrigin;
+                                    swAng = std::abs(std::remainder(std::atan2(delta.x,delta.y)-s_camYaw,
+                                        6.28318530f));
                                 }
                                 s_camYawSwitchDur = settings.SwitchDurationForAngle(swAng);
                             }
@@ -3741,10 +3711,10 @@ namespace DietDrCamera
                     const bool mountedTracking = targetLocked && a_this->id == RE::CameraState::kMount;
                     const float duration = MountedTargetLock::TrackingDuration(
                         sliderDur > 0.0001f ? sliderDur : 0.20f, mountedTracking);
-                    // Mounted tracking must have the same response at 30/60/144
-                    // FPS. Acquire/switch still select their own durations below.
+                    // On-foot and mounted tracking both advance in elapsed
+                    // seconds. A fixed 1/60 makes a .4s acquire take .1s at 240 FPS.
                     const float dt = a_this->id == RE::CameraState::kMount
-                        ? std::clamp(s_mountedLockDt, 0.0f, 0.10f) : 1.0f / 60.0f;
+                        ? std::clamp(s_mountedLockDt, 0.0f, 0.10f) : MountedTargetLock::FrameTime(s_mountedLockDt);
 
                     // Release state (declared at block scope so the locked
                     // branch can re-arm the capture edge).
@@ -3936,7 +3906,7 @@ namespace DietDrCamera
         // post-Update block reuses the same value to balance the field).
         float relExtra = 0.0f;
         if (s_relExtraOn && !targetLocked && !ownsCamera) {
-            s_relExtraT += (1.0f / 60.0f) / kRelExtraDur;
+            s_relExtraT += MountedTargetLock::FrameTime(s_mountedLockDt) / kRelExtraDur;
             if (s_relExtraT >= 1.0f) { s_relExtraT = 1.0f; s_relExtraOn = false; }
             const float t     = s_relExtraT;
             const float blend = t * t * (3.0f - 2.0f * t);   // smoothstep
@@ -5271,7 +5241,7 @@ namespace DietDrCamera
 
         static bool logged = false;
         if (!logged) {
-            spdlog::info("Diet Dr Camera: ThirdPersonState::Update hook fired");
+            spdlog::info("OmniCam: ThirdPersonState::Update hook fired");
             logged = true;
         }
 
@@ -5639,6 +5609,7 @@ namespace DietDrCamera
     void HookManager::HookedGetRotation(RE::ThirdPersonState* a_this, RE::NiQuaternion& a_rotation)
     {
         CallOriginalGetRotation(a_this, a_rotation);
+        BleedoutCameraOverride::ApplyGameplayRotation(a_this, a_rotation);
         if (DietDrCamera::SettingsManager::GetSingleton().diagnosticSuspendOverrides) return;
         CameraController::GetSingleton().ApplyPitchOffset(a_rotation);
     }
@@ -6190,30 +6161,45 @@ namespace DietDrCamera
 
     void HookManager::HookedOrbitProcessButton(RE::PlayerInputHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
     {
-        // static_cast performs the secondary-base adjustment; treating the
-        // incoming pointer as a ThirdPersonState* would read the wrong fields.
-        auto* state = static_cast<RE::ThirdPersonState*>(a_this);
-        const bool keepOrbit = a_event && a_event->GetDevice() == RE::INPUT_DEVICE::kGamepad &&
+        BleedoutCameraOverride::ObserveInput(a_event, GameplayCameraInput::Route::CameraButton);
+        // DDC owns the R3 hold/release gesture in R3ReleaseSink. Vanilla's
+        // camera-state handler arms on Down, then changes the zoom target and
+        // stateNotActive on Up. Restoring freeRotation alone still lets a tap
+        // start a first-person zoom for one frame before DDC restores framing.
+        // Suppress the whole gesture here so no native press latch is left set.
+        // TDM still receives it through the separate TogglePOVHandler/raw sink;
+        // other camera inputs (including scroll-wheel target switching) chain.
+        if (a_event && a_event->GetDevice() == RE::INPUT_DEVICE::kGamepad &&
             a_event->GetIDCode() == RE::BSWin32GamepadDevice::Keys::kRightThumb &&
-            a_event->QUserEvent() == "Toggle POV" && a_event->IsUp();
-        const auto orbit = state->freeRotation;
+            a_event->QUserEvent() == "Toggle POV") {
+            return;
+        }
+
+        // static_cast adjusts the secondary PlayerInputHandler base pointer.
+        const auto* state = static_cast<RE::ThirdPersonState*>(a_this);
         const auto& original = state->id == RE::CameraState::kMount
             ? _originalHorseOrbitProcessButton : _originalOrbitProcessButton;
         original(a_this, a_event, a_data);
-        if (keepOrbit) {
-            const auto reset = state->freeRotation;
-            state->freeRotation = orbit;
-            static unsigned logs = 0;
-            if ((reset.x != orbit.x || reset.y != orbit.y) && logs < 12) {
-                ++logs;
-                spdlog::info("[R3-RECENTER] prevented native orbit reset state={} yaw={:.3f}->{:.3f} pitch={:.3f}->{:.3f}",
-                    static_cast<int>(state->id), orbit.x, reset.x, orbit.y, reset.y);
-            }
+    }
+
+    void HookManager::HookedFirstPersonProcessButton(RE::PlayerInputHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
+    {
+        BleedoutCameraOverride::ObserveInput(a_event, GameplayCameraInput::Route::CameraButton);
+        // First person has its own native tap/hold POV switch. It must obey
+        // the same R3ReleaseSink threshold as third person; otherwise a short
+        // release rejected by DDC can still leave first person via vanilla.
+        // Stop Down too, so vanilla never arms its per-camera press latch.
+        if (a_event && a_event->GetDevice() == RE::INPUT_DEVICE::kGamepad &&
+            a_event->GetIDCode() == RE::BSWin32GamepadDevice::Keys::kRightThumb &&
+            a_event->QUserEvent() == "Toggle POV") {
+            return;
         }
+        _originalFirstPersonProcessButton(a_this, a_event, a_data);
     }
 
     void HookManager::HookedTogglePOVProcessButton(RE::TogglePOVHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
     {
+        BleedoutCameraOverride::ObserveInput(a_event, GameplayCameraInput::Route::TogglePOV);
         // Transformed forms have no real 1p rig â€” entering 1p shows a
         // floating-hands shot that breaks the fantasy and exposes seams in the
         // morph mesh. Vanilla already refuses first person in both beast forms;
@@ -6253,16 +6239,8 @@ namespace DietDrCamera
         // nothing is lost by stopping here.
         if (UnpauseManager::IsItemPreviewMenuOpen()) return;
 
-        // Only swap POV when the user has HELD the "Toggle POV" binding past
-        // a short threshold. On controller with TDM this matters because
-        // R3-tap is already claimed by TDM target-lock â€” we must not fire
-        // on the initial press. Hold duration comes from the button event's
-        // heldDownSecs, which the engine increments each frame the button
-        // is down. Fire once per hold via sTriggered, reset on release.
-        constexpr float kHoldThreshold = 0.3f;  // seconds â€” matches vanilla fPOVSwitchHoldDelay
-
-        static bool sTriggered = false;
-
+        // Keyboard/mouse toggles on release. Controller holds are handled
+        // exclusively by R3ReleaseSink with one threshold for either POV.
         if (a_event && a_event->QUserEvent() == "Toggle POV") {
             const bool isGamepad =
                 a_event->device.get() == RE::INPUT_DEVICE::kGamepad;
@@ -6317,30 +6295,9 @@ namespace DietDrCamera
                 return;
             }
 
-            // Gamepad path unchanged: pass Down through so TDM's
-            // TogglePOVHandler hook can fire its target-lock OFF latch.
-            // R3 hold is owned by HookManager::R3ReleaseSink. The in-hook
-            // hold-threshold below stays as a defensive secondary fire
-            // for gamepad users without TDM (or when its sink doesn't
-            // claim the event for some reason).
-            if (a_event->IsDown()) {
-                if (!sTriggered && a_event->HeldDuration() >= kHoldThreshold) {
-                    sTriggered = true;
-                    if (auto* pc = RE::PlayerCamera::GetSingleton()) {
-                        const bool wasFirst = pc->IsInFirstPerson();
-                        spdlog::info("TogglePOV: gamepad hold-threshold (held={:.2f}s), wasFirst={}",
-                                     a_event->HeldDuration(), wasFirst);
-                        if (wasFirst) pc->ForceThirdPerson();
-                        else          pc->ForceFirstPerson();
-                        // No reroll on POV switch (see R3-release note above).
-                        if (s_dialogueMenuOpen) DialogueLookPicker::OnDialogueOpen(/*allowReroll=*/false);
-                    }
-                }
-                _originalTogglePOVProcessButton(a_this, a_event, a_data);
-                return;
-            }
-            // Gamepad release â€” reset one-shot, fall through to vanilla.
-            sTriggered = false;
+            // Keep the full handler chain for TDM's target-lock acquisition
+            // and release. Camera-state handlers suppress native R3 switching;
+            // R3ReleaseSink alone decides whether this press was long enough.
         }
 
         _originalTogglePOVProcessButton(a_this, a_event, a_data);
@@ -6348,6 +6305,7 @@ namespace DietDrCamera
 
     void HookManager::HookedTogglePOVUpdateHeldState(RE::TogglePOVHandler* a_this, const RE::ButtonEvent* a_event)
     {
+        BleedoutCameraOverride::ObserveInput(a_event, GameplayCameraInput::Route::POVHeld);
         // Swallow keyboard/mouse "Toggle POV" entirely. Vanilla's
         // hold-past-threshold POV toggle runs from this slot (verified
         // empirically: ProcessButton swallow alone left a mid-hold
@@ -6521,83 +6479,31 @@ namespace DietDrCamera
 
     void HookManager::HookedBleedoutBegin(RE::BleedoutCameraState* a_this)
     {
-        ReleaseDeathFreeLookInput();  // every death / knockdown captures a fresh view
-        if (DietDrCamera::SettingsManager::GetSingleton().diagnosticSuspendOverrides) {
+        ReleaseDeathFreeLookInput();
+        const auto& settings = SettingsManager::GetSingleton();
+        if (settings.diagnosticSuspendOverrides) {
             _originalBleedoutBegin(a_this);
             return;
         }
-
-        // Ragdoll vs death. The engine enters BleedoutCameraState for BOTH a real
-        // death and a recoverable knockdown (Unrelenting Force, paralysis, â€¦). For
-        // a ragdoll, run NONE of the death cam: skip the slow-mo/FOV/free-look, and
-        // push fPlayerDeathReloadTime out of reach so the load-save prompt can't
-        // fire while the player gets up. The alive ThirdPersonUpdate sync restores
-        // the slider value once they're standing again.
-        const auto& sRag = SettingsManager::GetSingleton();
         s_deathCamRealDeath = BleedoutIsRealDeath();
-        s_slowmoFadeReq     = false;
-        if (!s_deathCamRealDeath) {
-            // Recoverable ragdoll. Always suppress the load-save prompt and run the
-            // ragdoll cinematic (slow-mo here, FOV/free-look in Update); the
-            // individual sliders (slow-mo strength 0, free-look off, â€¦) gate the
-            // sub-effects, so no separate enable toggle is needed.
-            if (auto* gsc = RE::GameSettingCollection::GetSingleton())
-                if (auto* setting = gsc->GetSetting("fPlayerDeathReloadTime"))
-                    setting->data.f = 86400.0f;
-            if (auto* ini = RE::INISettingCollection::GetSingleton())
-                if (auto* setting = ini->GetSetting("fPlayerDeathReloadTime:GamePlay"))
-                    setting->data.f = 86400.0f;
-            // Duration 0 means "no slow motion" now that 0 is the default â€”
-            // it is the second half of the same off switch as Strength 0.
-            if (sRag.ragdollCamSlowmoStrength > 0.001f &&
-                sRag.ragdollCamSlowmoDuration > 0.001f) {
-                s_slowmoStrengthActive = sRag.ragdollCamSlowmoStrength;
-                s_slowmoDurationActive = sRag.ragdollCamSlowmoDuration;
-                s_deathSlowmoLast      = std::chrono::steady_clock::now();
-                s_deathSlowmoElapsed   = 0.0f;
-                s_deathSlowmoActive    = true;
-            }
-            spdlog::info("HookManager: BleedoutCameraState::Begin â€” RAGDOLL (player alive)");
-            _originalBleedoutBegin(a_this);
-            return;
-        }
-
-        // Critical: push fPlayerDeathReloadTime BEFORE the engine's Begin
-        // runs. The reload-prompt countdown captures the setting value once
-        // at Begin time, so any later write (Update, sink, etc.) only takes
-        // effect on the *next* death. Writing here makes the duration
-        // slider apply on the very first death of a session.
-        const auto& sCfg2 = SettingsManager::GetSingleton();
-        const float desired = sCfg2.deathCameraInfiniteDuration
-            ? 86400.0f
-            : sCfg2.deathCameraHoldDuration;
-        if (auto* gsc = RE::GameSettingCollection::GetSingleton()) {
-            if (auto* setting = gsc->GetSetting("fPlayerDeathReloadTime")) {
-                setting->data.f = desired;
-            }
-        }
-        if (auto* ini = RE::INISettingCollection::GetSingleton()) {
-            if (auto* setting = ini->GetSetting("fPlayerDeathReloadTime:GamePlay")) {
-                setting->data.f = desired;
-            }
-        }
-        spdlog::info("HookManager: BleedoutCameraState::Begin â€” primed fPlayerDeathReloadTime to {:.1f}s (infinite={})",
-                     desired, sCfg2.deathCameraInfiniteDuration);
-
-        // Arm the death-cam slow-motion envelope. The driver in
-        // HookedBleedoutUpdate eases time down then back over Duration seconds.
-        if (sCfg2.deathCameraSlowmoStrength > 0.001f &&
-            sCfg2.deathCameraSlowmoDuration > 0.001f) {
-            s_slowmoStrengthActive = sCfg2.deathCameraSlowmoStrength;
-            s_slowmoDurationActive = sCfg2.deathCameraSlowmoDuration;
-            s_deathSlowmoLast    = std::chrono::steady_clock::now();
-            s_deathSlowmoElapsed = 0.0f;
-            s_deathSlowmoActive  = true;
-            spdlog::info("HookManager: death-cam slow-mo armed (strength={:.2f} duration={:.1f}s)",
-                         sCfg2.deathCameraSlowmoStrength, sCfg2.deathCameraSlowmoDuration);
-        }
-
+        // Some native callers inline the state switch; keep the independent
+        // event effects active until the entry guard returns to gameplay.
+        BleedoutCameraOverride::BeginEvent(s_deathCamRealDeath);
+        const float seconds = !s_deathCamRealDeath || settings.deathCameraInfiniteDuration
+            ? 86400.0f : settings.deathCameraHoldDuration;
+        if (auto* gsc = RE::GameSettingCollection::GetSingleton())
+            if (auto* setting = gsc->GetSetting("fPlayerDeathReloadTime")) setting->data.f = seconds;
+        if (auto* ini = RE::INISettingCollection::GetSingleton())
+            if (auto* setting = ini->GetSetting("fPlayerDeathReloadTime:GamePlay")) setting->data.f = seconds;
+        spdlog::info("HookManager: BleedoutCameraState::Begin - {} (reload delay {:.1f}s)",
+            s_deathCamRealDeath ? "death" : "ragdoll", seconds);
         _originalBleedoutBegin(a_this);
+        if (!s_deathCamRealDeath) {
+            // Stop only this ragdoll's ambience; native End owns its cleanup.
+            const auto soundID = a_this->activeSound.soundID;
+            const bool stopped = a_this->activeSound.Stop();
+            spdlog::info("[Ragdoll] Camera ambience stop: soundID={}, accepted={}", soundID, stopped);
+        }
     }
 
     void HookManager::HookedBleedoutEnd(RE::BleedoutCameraState* a_this)
@@ -6605,9 +6511,7 @@ namespace DietDrCamera
         // End rarely (never?) fires on the death-to-main-menu transition, but
         // we release here too as a backup for any code path that does call it.
         ReleaseDeathFreeLookInput();
-        // Safety: if the slow-mo envelope was still mid-flight when bleedout
-        // ended, restore normal time so it can't leak into gameplay.
-        RestoreDeathSlowmo();
+        // Slow motion survives camera changes and ends on event recovery/load.
         spdlog::debug("HookManager: BleedoutCameraState::End - reset free look");
 
         _originalBleedoutEnd(a_this);
@@ -6622,7 +6526,7 @@ namespace DietDrCamera
 
     void HookManager::RequestRagdollSlowmoFade()
     {
-        s_slowmoFadeReq = true;
+        BleedoutCameraOverride::RequestSlowMotionFade();
     }
 
     bool HookManager::IsBleedoutRealDeath()
@@ -6759,68 +6663,6 @@ namespace DietDrCamera
         const bool ragdoll = !s_deathCamRealDeath;
         const float activeFov      = ragdoll ? settings.ragdollCamFov      : settings.deathCameraFov;
         const bool  activeFreeLook = ragdoll ? settings.ragdollCamFreeLook : settings.deathCameraFreeLook;
-
-        // Slow-motion driver â€” shared by death and ragdoll. Eases the global time
-        // multiplier down to (1 - strength), holds, then eases it back to 1.0,
-        // spanning Duration seconds of RUNNING game time (the accumulator pauses
-        // during menus). Trapezoid envelope with smootherstep edges. Parameters
-        // (s_slowmoStrengthActive/Duration) were captured at arm time; the ragdoll
-        // fade hotkey can jump it straight into the ramp-out via s_slowmoFadeReq.
-        if (s_deathSlowmoActive) {
-            if (auto* timer = RE::BSTimer::GetSingleton()) {
-                const float dur      = s_slowmoDurationActive > 0.5f
-                                           ? s_slowmoDurationActive : 0.5f;
-                // Strength is a 0..90 PERCENT; convert to a slowdown fraction
-                // (resulting speed = 1 - fraction).
-                const float strength = std::clamp(s_slowmoStrengthActive / 100.0f, 0.0f, 0.9f);
-
-                // Advance the running-time accumulator, paused during menus.
-                const auto  now = std::chrono::steady_clock::now();
-                float       dtw = std::chrono::duration<float>(now - s_deathSlowmoLast).count();
-                s_deathSlowmoLast = now;
-                dtw = std::clamp(dtw, 0.0f, 0.1f);   // guard against frames the driver skipped
-                auto* uiSlow = RE::UI::GetSingleton();
-                const bool paused = ddcMenuOpen || MenuUI::IsQuickTuneOpen() ||
-                                    (uiSlow && uiSlow->GameIsPaused());
-                if (!paused) s_deathSlowmoElapsed += dtw;
-
-                // Fade hotkey (ragdoll): jump to the START of the ramp-out so the
-                // slow-mo eases back to normal now instead of holding the duration.
-                if (s_slowmoFadeReq) {
-                    s_slowmoFadeReq = false;
-                    const float rampOut = std::clamp(dur * 0.35f, 0.10f, 0.80f);
-                    s_deathSlowmoElapsed = (std::max)(s_deathSlowmoElapsed, dur - rampOut);
-                }
-                const float t = s_deathSlowmoElapsed;
-
-                if (t >= dur || strength <= 0.001f) {
-                    timer->SetGlobalTimeMultiplier(1.0f, true);
-                    s_deathSlowmoActive = false;
-                } else {
-                    // Fast onset, smooth release. The ramp-IN is SHORT and uses
-                    // an ease-OUT curve (max slope at t=0) so the slowdown bites
-                    // almost immediately (kills the "micro delay"); the ramp-OUT
-                    // is longer with a smootherstep so it eases back gently.
-                    const float rampIn  = std::clamp(dur * 0.12f, 0.05f, 0.20f);
-                    const float rampOut = std::clamp(dur * 0.35f, 0.10f, 0.80f);
-                    float amount;
-                    if (t < rampIn) {
-                        const float x = t / rampIn;
-                        amount = 1.0f - (1.0f - x) * (1.0f - x);   // ease-out (immediate onset)
-                    } else if (t > dur - rampOut) {
-                        float x = (dur - t) / rampOut;
-                        x = std::clamp(x, 0.0f, 1.0f);
-                        amount = x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);   // smootherstep
-                    } else {
-                        amount = 1.0f;
-                    }
-                    const float mult = std::clamp(1.0f - amount * strength, 0.05f, 1.0f);
-                    timer->SetGlobalTimeMultiplier(mult, true);
-                }
-            } else {
-                s_deathSlowmoActive = false;
-            }
-        }
 
         if (activeFov > 0.0f) {
             playerCam->worldFOV = activeFov;
@@ -6975,9 +6817,7 @@ namespace DietDrCamera
         // AE offset 0x2A2 from the function start. 14 bytes of
         // trampoline cover the write_call<5> redirection.
         const auto callSite = RuntimeHooks::Get().enterFurniture;
-        RuntimeHooks::RequireCall(callSite);
-        auto& trampoline = SKSE::GetTrampoline();
-        _originalEnterFurniture = trampoline.write_call<5>(
+        _originalEnterFurniture = RuntimeHooks::InstallCall(
             callSite,
             reinterpret_cast<std::uintptr_t>(&EnterFurniture));
         spdlog::info("HookManager: TESFurniture::Activate EnterFurniture call patched");
@@ -7373,21 +7213,10 @@ namespace DietDrCamera
             }
         }
 
-        // Ragdoll/death recovery mirror. The third-person update owns the
-        // normal recovery for the bleedout free-look feature â€” it clears the
-        // collision override and calls RestoreDeathSlowmo() every frame (see
-        // the ~962/967 block). But if the player toggles to FIRST PERSON
-        // while a ragdoll (recoverable knockdown) is in effect, neither the
-        // third-person update NOR the bleedout update runs anymore, so the
-        // global time multiplier stays clamped low â€” the whole game runs in
-        // slow motion and the player crawls, reading as "can't move." Mirror
-        // the recovery here so any first-person frame restores normal time
-        // (and reverts the collision patch; UpdateCameraCasterPatch is
-        // change-gated so the per-frame call is a no-op once settled). Runs
-        // before the early-return branches below so it can't be skipped.
+        // Clear camera-only free look in first person. The universal event
+        // driver owns slow-motion recovery even when the native camera is off.
         s_bleedoutFreeLook.Reset();
         s_forceCasterPatchForDeathFreeLook = false;
-        RestoreDeathSlowmo();
         UpdateCameraCasterPatch();
 
         // Inverse revert via direct state-pointer swap (same rationale
@@ -7943,7 +7772,6 @@ namespace DietDrCamera
         (void)fofAnyCharging;
         (void)fofChargeProgress;
 
-        const float effectiveWorldFov = sDialogueFovCurrent + fovBurst;
         // Defer to Improved Camera SE when present. ICSE's UpdateCamera
         // trampoline at PlayerCamera::Update+0x1A6 runs AFTER this hook
         // each frame and writes its own per-state FOV, so our value would
@@ -7982,6 +7810,7 @@ namespace DietDrCamera
         // person but not third" report. When this hook ticks, it owns the 1p
         // FOV, menu open or not; the parked-kTween case never reaches it.)
         if (!icseLoaded && !s_mapMenuOpen) {
+            const float effectiveWorldFov = CombatFOVController::Apply(sDialogueFovCurrent) + fovBurst;
             // Same invariant as CameraController::ApplyFOV: a worldFOV <= 0
             // inverts the projection (inside-out) and never self-heals. The 1p
             // exp-lerp can't normally undershoot a positive target, but the
@@ -8172,7 +8001,9 @@ namespace DietDrCamera
 
         if (auto* pcTf = RE::PlayerCamera::GetSingleton()) s_tfUcpIn = pcTf->worldFOV;
         VanityCamera::Tick();
+        BleedoutCameraOverride::Tick(a_camera);
         _originalUpdateCameraPost(a_camera);
+        BleedoutCameraOverride::UpdateEffects(a_camera);
 
         // Unsupported states can run without ThirdPersonState::Update. Clear
         // the mounted tail here, but do not reset the state-update sample clock
@@ -8480,37 +8311,6 @@ namespace DietDrCamera
         // answers for the flag while this window is open â€” see the carve-out
         // in UnpauseManager's InputHandlerHook. The flag is only ever restored
         // if WE cleared it, so another mod's claim survives.
-        // [SLOWMO-LEAK] Global time multiplier watchdog.
-        //
-        // The death / ragdoll camera slows the whole world down by writing
-        // BSTimer's global time multiplier, and the driver that walks it back
-        // to 1.0 lives in HookedBleedoutUpdate â€” which only ticks while the
-        // camera is actually in BleedoutCameraState. There is a safety restore
-        // too, but it sits in HookedThirdPersonUpdate, and THAT only ticks in
-        // THIRD PERSON. So any path that leaves bleedout without the state's
-        // End() firing, while the player is in first person â€” getting up from
-        // a ragdoll in 1p, or reloading a save from a 1p death â€” left the
-        // multiplier wherever the ramp had got to. The world then runs at a
-        // fraction of speed indefinitely, which is the long-standing "frozen in
-        // place": not stuck, crawling.
-        //
-        // This hook is universal â€” every camera state, both views â€” so it is
-        // the right place for the guard. Scoped to OUR flag only, so a Slow
-        // Time shout or another mod's slow-mo is never touched.
-        if (s_deathSlowmoActive) {
-            const bool inBleedout = a_camera && a_camera->currentState &&
-                                    a_camera->currentState->id == RE::CameraState::kBleedout;
-            if (!inBleedout) {
-                float leaked = 1.0f;
-                if (auto* t = RE::BSTimer::GetSingleton()) leaked = t->QGlobalTimeMultiplier();
-                RestoreDeathSlowmo();
-                spdlog::warn("[SLOWMO-LEAK] time multiplier was left at {:.3f} outside bleedout "
-                             "(camera state {}) â€” restored to 1.0", leaked,
-                             a_camera && a_camera->currentState
-                                 ? static_cast<int>(a_camera->currentState->id) : -1);
-            }
-        }
-
         // [FREEZE] "Frozen in place" watchdog.
         //
         // A long-standing, intermittent report: the player stops being able to
@@ -9143,7 +8943,7 @@ namespace DietDrCamera
                         tdmF.HasYawControl(), tdmF.HasDirectionalMovementDisabled(),
                         tdmF.GetRawTargetLockState(),
                         cmF ? (cmF->IsMovementControlsEnabled() ? 1 : 0) : -1,
-                        gtm, s_deathSlowmoActive,
+                        gtm, BleedoutCameraOverride::IsSlowMotionActive(),
                         a_camera && a_camera->currentState
                             ? static_cast<int>(a_camera->currentState->id) : -1,
                         MenuUI::IsGameInputBlocked(),
@@ -10708,10 +10508,8 @@ namespace DietDrCamera
 
     void HookManager::InstallUpdateCameraPostHook()
     {
-        auto& trampoline = SKSE::GetTrampoline();
         const auto callSite = RuntimeHooks::Get().cameraUpdate;
-        RuntimeHooks::RequireCall(callSite);
-        _originalUpdateCameraPost = trampoline.write_call<5>(
+        _originalUpdateCameraPost = RuntimeHooks::InstallCall(
             callSite, &HookedUpdateCameraPost);
         spdlog::info("HookManager: UpdateCameraPost trampoline installed at 0x{:x}",
                      callSite);
@@ -11466,7 +11264,7 @@ namespace DietDrCamera
             // window — the dilation starts BEFORE the menu registers, so
             // the keypress stamp is the only usable arm. The death-cam
             // slow-mo is DDC's own dilation and is excluded.
-            if (isPlayerNiCam && !spimActive && !s_deathSlowmoActive) {
+            if (isPlayerNiCam && !spimActive && !BleedoutCameraOverride::IsSlowMotionActive()) {
                 const bool keyWindow = std::chrono::duration<float>(
                     std::chrono::steady_clock::now() - s_tweenKeyTp).count() < 1.5f;
                 const bool tweenUp = uiFov &&
@@ -11983,9 +11781,21 @@ namespace DietDrCamera
         return _originalMenuControlsProcessEvent(a_this, a_event, a_source);
     }
 
+    bool HookManager::PatchCameraCasterEntry(const std::array<std::uint8_t, 6>& expected,
+        const std::array<std::uint8_t, 6>& replacement)
+    {
+        if (cameraCasterConflict) return false;
+        if (RuntimeHooks::TryReplaceCode6(cameraCasterAddr, expected, replacement)) return true;
+        cameraCasterConflict = true;
+        spdlog::error("[COLLISION] CameraCaster entry changed outside DDC or could not be patched; "
+                      "stopping collision overrides for this session to preserve the current code");
+        Diagnostics::LogBytes("CameraCaster ownership conflict", cameraCasterAddr, 16);
+        return false;
+    }
+
     void HookManager::UpdateCameraCasterPatch()
     {
-        if (!cameraCasterAddr) return;
+        if (!cameraCasterAddr || cameraCasterConflict) return;
 
         auto& settings = SettingsManager::GetSingleton();
 
@@ -12011,29 +11821,12 @@ namespace DietDrCamera
 
         if (desired == cameraCasterState) return;
 
-        switch (desired) {
-        case CasterPatchState::kOriginal:
-            REL::safe_write(cameraCasterAddr, cameraCasterOrigBytes, 6);
-            break;
-        case CasterPatchState::kFalseStub: {
-            // xor eax,eax; ret; nop; nop; nop  (6 bytes, always "no hit")
-            const std::uint8_t patch[6] = { 0x31, 0xC0, 0xC3, 0x90, 0x90, 0x90 };
-            REL::safe_write(cameraCasterAddr, patch, 6);
-            break;
-        }
-        case CasterPatchState::kDivert: {
-            // E9 <rel32> ; nop   ->   jmp cameraCasterDivertStub
-            const std::intptr_t rel =
-                static_cast<std::intptr_t>(cameraCasterDivertStub) -
-                static_cast<std::intptr_t>(cameraCasterAddr + 5);
-            const std::int32_t rel32 = static_cast<std::int32_t>(rel);
-            std::uint8_t patch[6] = { 0xE9, 0, 0, 0, 0, 0x90 };
-            std::memcpy(patch + 1, &rel32, sizeof(rel32));
-            REL::safe_write(cameraCasterAddr, patch, 6);
-            break;
-        }
-        }
-
+        const auto bytesFor = [](CasterPatchState state) -> const std::array<std::uint8_t, 6>& {
+            if (state == CasterPatchState::kFalseStub) return cameraCasterFalseBytes;
+            if (state == CasterPatchState::kDivert) return cameraCasterDivertBytes;
+            return cameraCasterOrigBytes;
+        };
+        if (!PatchCameraCasterEntry(bytesFor(cameraCasterState), bytesFor(desired))) return;
         cameraCasterState = desired;
         spdlog::info("HookManager: CameraCaster patch -> {}",
             desired == CasterPatchState::kOriginal  ? "original" :
@@ -12053,7 +11846,7 @@ namespace DietDrCamera
         if (a_hitChar) *a_hitChar = nullptr;
         const auto& settings = SettingsManager::GetSingleton();
         const auto selection = settings.cameraCollision.ForEnvironment(settings.indoorMode).keep;
-        if (!selection.Any() || !a_world || !a_physics || !cameraCasterDivertStub) return false;
+        if (!selection.Any() || !a_world || !a_physics || !cameraCasterDivertStub || cameraCasterConflict) return false;
 
         CameraCollision::ScopedFilter filter(selection);
         using RawFn = bool (*)(void*, RE::bhkWorld*, CCVec4&, CCVec4&,
@@ -12061,18 +11854,11 @@ namespace DietDrCamera
 
         // Retain the existing verified original-entry call mechanism. Restore
         // the diversion on every C++ exit; no guessed relocated prologue.
+        if (!PatchCameraCasterEntry(cameraCasterDivertBytes, cameraCasterOrigBytes)) return false;
         const auto rearm = [] {
-            const auto rel = static_cast<std::intptr_t>(cameraCasterDivertStub) -
-                             static_cast<std::intptr_t>(cameraCasterAddr + 5);
-            const auto rel32 = static_cast<std::int32_t>(rel);
-            std::uint8_t patch[6] = {0xE9, 0, 0, 0, 0, 0x90};
-            std::memcpy(patch + 1, &rel32, sizeof(rel32));
-            REL::safe_write(cameraCasterAddr, patch, 6);
-            FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(cameraCasterAddr), 6);
+            PatchCameraCasterEntry(cameraCasterOrigBytes, cameraCasterDivertBytes);
         };
         struct RestoreEntry { const decltype(rearm)& run; ~RestoreEntry() { run(); } } restore{rearm};
-        REL::safe_write(cameraCasterAddr, cameraCasterOrigBytes, 6);
-        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(cameraCasterAddr), 6);
         const bool hit = reinterpret_cast<RawFn>(cameraCasterAddr)(
             a_physics, a_world, a_start, a_end, a_resultInfo, a_hitChar, a_hullSize);
 

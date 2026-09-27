@@ -5,6 +5,10 @@ $ErrorActionPreference = 'Stop'
 if ((Get-Item -LiteralPath $Dll).VersionInfo.FileVersion -ne $Version) {
     throw 'DLL file version does not match the project.'
 }
+$identity = (Get-Item -LiteralPath $Dll).VersionInfo
+if ($identity.ProductName -ne 'OmniCam' -or $identity.FileDescription -ne 'OmniCam' -or $identity.InternalName -ne 'OmniCam') {
+    throw 'DLL product identity must be OmniCam.'
+}
 if (-not ('DdcRelease.BinaryCheck' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -74,6 +78,8 @@ namespace DdcRelease {
             uint packedVersion = ((uint)expected.Major << 24) | ((uint)expected.Minor << 16) | ((uint)expected.Build << 4);
             if (U(b, declaration) != 1 || U(b, declaration + 4) != packedVersion)
                 throw new Exception("SKSE declaration version does not match the project");
+            if (Z(b, declaration + 8) != "OmniCam")
+                throw new Exception("SKSE plugin name must be OmniCam");
             // PluginDeclarationInfo begins four bytes after its structure version.
             // NG supports both structure families and Address Library formats 1/2/5.
             if (U(b, declaration + 0x304) != 3 || U(b, declaration + 0x308) != 1)

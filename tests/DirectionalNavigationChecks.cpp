@@ -29,7 +29,11 @@ static void Expect(DirectionalNavigation& nav, std::span<const NavigationItem> i
     std::uint32_t from, int dx, int dy, std::uint32_t expected, const char* message, int layer = 0)
 {
     const int next = nav.Move(items, Index(items, from), dx, dy, layer);
-    Require(expected == 0 ? next == -1 : next >= 0 && items[next].id == expected, message);
+    if (!(expected == 0 ? next == -1 : next >= 0 && items[next].id == expected)) {
+        std::cerr << "from " << from << " direction " << dx << "," << dy << " expected " << expected
+            << " got " << (next < 0 ? 0 : items[next].id) << "\n";
+        throw std::runtime_error(message);
+    }
 }
 
 static void CheckOffsetControls()
@@ -199,6 +203,192 @@ static void CheckPaneCrossingAndRelayout()
     Expect(nav, items, 2, 0, -1, 0, "Navigation moved a cursor from an inactive modal layer", 2);
 }
 
+static void CheckSpatialHeaders()
+{
+    // Tabs, toggles, entries and actions use the same geometry. The expected
+    // destination changes with the source column and the controls present.
+    for (float scale : {0.5f, 2.0f / 3.0f, 1.0f, 1.2f}) {
+        for (bool mirror : {false, true}) {
+            for (int layer : {0, 1, 2}) {
+                for (float tabX : {20.0f, 400.0f, 850.0f}) {
+                    auto tab = Item(1, tabX, 20, 100, 24);
+                    auto first = Item(2, 20, 160, 180);
+                    auto second = Item(3, 20, 190, 180);
+                    for (auto* row : {&first, &second}) {
+                        row->wx0 = 10; row->wx1 = 230;
+                        row->wy0 = 150; row->wy1 = 260;
+                    }
+                    auto resetAll = Item(4, 20, 280, 170);
+                    auto reset = Item(5, 400, 130, 60);
+                    auto slider = Item(6, 350, 160, 600, 28);
+                    auto hidden = first; hidden.id = 8; hidden.y0 = 100; hidden.y1 = 120;
+                    auto outdoor = Item(10, 20, 80, 85, 24);
+                    auto indoor = Item(11, 115, 80, 85, 24);
+                    std::vector items{tab, first, second, resetAll, reset, slider, hidden, outdoor, indoor};
+                    for (auto& item : items) {
+                        item.layer = layer;
+                        if (mirror) {
+                            const float x0 = item.x0, wx0 = item.wx0;
+                            item.x0 = 1000 - item.x1; item.x1 = 1000 - x0;
+                            item.wx0 = 1000 - item.wx1; item.wx1 = 1000 - wx0;
+                        }
+                        item.x0 = item.x0 * scale + 73; item.x1 = item.x1 * scale + 73;
+                        item.wx0 = item.wx0 * scale + 73; item.wx1 = item.wx1 * scale + 73;
+                        item.y0 = item.y0 * scale + 31; item.y1 = item.y1 * scale + 31;
+                        item.wy0 = item.wy0 * scale + 31; item.wy1 = item.wy1 * scale + 31;
+                    }
+                    auto behindPopup = items[1]; behindPopup.id = 9;
+                    behindPopup.layer = layer + 1;
+                    items.push_back(behindPopup);
+                    std::reverse(items.begin(), items.end());
+                    DirectionalNavigation nav;
+                    const auto below = tabX < 100 ? 10u : tabX < 500 ? 5u : 6u;
+                    Expect(nav, items, 1, 0, 1, below,
+                        "Down ignored the closest control below the current column", layer);
+                    nav.Reset();
+                    Expect(nav, items, 10, mirror ? -1 : 1, 0, 11,
+                        "Horizontal navigation missed the neighboring toggle", layer);
+                    Expect(nav, items, 11, 0, 1, 2,
+                        "Down from a toggle missed the list directly below it", layer);
+                    Expect(nav, items, 2, 0, 1, 3,
+                        "Down skipped the next list row", layer);
+                    std::erase_if(items, [](const auto& item) { return item.id == 10 || item.id == 11; });
+                    nav.Reset();
+                    Expect(nav, items, 1, 0, 1, tabX < 100 ? 2u : below,
+                        "Removing the toggle did not expose the closest control below", layer);
+                    std::erase_if(items, [](const auto& item) { return item.id == 2; });
+                    nav.Reset();
+                    Expect(nav, items, 1, 0, 1, tabX < 100 ? 3u : below,
+                        "An unavailable entry changed navigation in an unrelated column", layer);
+                }
+            }
+        }
+    }
+    // A child window's top edge is not a focusable control. A distant action
+    // inside it must not beat either the toggle or the nested row above it.
+    auto tab = Item(1, 20, 20);
+    auto toggle = Item(2, 20, 50);
+    auto row = Item(3, 20, 90);
+    row.wx1 = 200; row.wy0 = 80; row.wy1 = 130;
+    auto action = Item(4, 20, 160);
+    action.wy0 = 42; action.wy1 = 500;
+    std::array nested{tab, toggle, row, action};
+    DirectionalNavigation nav;
+    Expect(nav, nested, 1, 0, 1, 2, "A container boundary stole focus from the nearby toggle");
+    Expect(nav, nested, 2, 0, 1, 3, "A nested list lost to a farther action in its parent");
+    Expect(nav, nested, 3, 0, 1, 4, "Could not reach the action below the list");
+    // Identical visual layouts navigate alike regardless of window ownership.
+    auto near = Item(2, 20, 60);
+    auto far = Item(3, 20, 78);
+    std::array ownership{tab, near, far};
+    for (bool child : {false,true}) {
+        if (child) { ownership[1].wx1 = 200; ownership[1].wy0 = 55; ownership[1].wy1 = 100; }
+        nav.Reset();
+        Expect(nav, ownership, 1, 0, 1, 2, "Window ownership outweighed visible proximity");
+    }
+}
+
+static void CheckTabEntry()
+{
+    for (float scale : {0.5f, 2.0f / 3.0f, 1.0f, 1.2f}) for (int layer : {0, 1, 2}) {
+        auto tab = Item(1, 600, 20, 130, 24); tab.tab = true;
+        auto toggle = Item(2, 20, 75, 280, 30); toggle.entryTab = tab.id;
+        auto slider = Item(3, 20, 150, 930, 28);
+        auto neighbor = Item(4, 450, 20, 130, 24); neighbor.tab = true;
+        std::vector items{slider, neighbor, toggle, tab};
+        for (auto& item : items) {
+            item.layer = layer;
+            item.x0 *= scale; item.x1 *= scale;
+            item.y0 *= scale; item.y1 *= scale;
+            item.wx0 *= scale; item.wx1 *= scale;
+            item.wy0 *= scale; item.wy1 *= scale;
+        }
+        DirectionalNavigation nav;
+        Expect(nav, items, 1, 0, 1, 2, "Vanity tab skipped its leading toggle", layer);
+        Expect(nav, items, 2, 0, -1, 1, "Toggle returned to an unrelated tab", layer);
+        Expect(nav, items, 1, 0, 1, 2, "Returning from the tab lost the toggle", layer);
+        Expect(nav, items, 2, 0, 1, 3, "Tab entry lane stranded focus before the next control", layer);
+        Expect(nav, items, 1, -1, 0, 4, "Tab entry changed horizontal navigation", layer);
+        Expect(nav, items, 4, 0, 1, 3, "Explicit entry overrode another tab's geometry", layer);
+        const auto original = items;
+        items[Index(items,2)].layer = layer + 1;
+        nav.Reset();
+        Expect(nav, items, 1, 0, 1, 3, "Tab entry escaped into another modal layer", layer);
+        items = original;
+        items[Index(items,2)].wx1 = 400 * scale;
+        nav.Reset();
+        Expect(nav, items, 1, 0, 1, 3, "Tab entry escaped into another window", layer);
+        items = original;
+        items[Index(items,2)].clipY1 = 70 * scale;
+        nav.Reset();
+        Expect(nav, items, 1, 0, 1, 3, "Tab entry selected a clipped toggle", layer);
+        items = original;
+        std::erase_if(items, [](const auto& item) { return item.id == 2; });
+        nav.Reset();
+        Expect(nav, items, 1, 0, 1, 3, "Removed tab entry prevented ordinary navigation", layer);
+    }
+}
+
+static void CheckShortNeighboringLists()
+{
+    for (float scale : {0.5f, 2.0f / 3.0f, 1.0f, 1.2f}) {
+        for (bool mirror : {false, true}) {
+            for (int layer : {0, 1, 2}) {
+                auto first = Item(1, 20, 100, 180);
+                auto last = Item(2, 20, 130, 180);
+                for (auto* row : {&first, &last}) {
+                    row->wx0 = 10; row->wx1 = 210;
+                    row->wy0 = 90; row->wy1 = 160;
+                }
+                auto hidden = last; hidden.id = 3; hidden.y0 = 175; hidden.y1 = 195;
+                auto resetAll = Item(4, 20, 175, 150);
+                auto upperSlider = Item(5, 240, 290, 600, 28);
+                auto lowerSlider = Item(6, 240, 390, 600, 28);
+                auto upperReset = Item(7, 380, 265, 60);
+                auto lowerReset = Item(8, 380, 365, 60);
+                std::vector items{first, last, hidden, resetAll, upperSlider, lowerSlider, upperReset, lowerReset};
+                for (auto& item : items) {
+                    item.layer = layer;
+                    if (mirror) {
+                        const float x0 = item.x0, wx0 = item.wx0;
+                        item.x0 = 1000 - item.x1; item.x1 = 1000 - x0;
+                        item.wx0 = 1000 - item.wx1; item.wx1 = 1000 - wx0;
+                    }
+                    item.x0 = item.x0 * scale + 73; item.x1 = item.x1 * scale + 73;
+                    item.wx0 = item.wx0 * scale + 73; item.wx1 = item.wx1 * scale + 73;
+                    item.y0 = item.y0 * scale + 31; item.y1 = item.y1 * scale + 31;
+                    item.wy0 = item.wy0 * scale + 31; item.wy1 = item.wy1 * scale + 31;
+                }
+                std::reverse(items.begin(), items.end());
+                for (const auto slider : {5u, 6u}) {
+                    DirectionalNavigation nav;
+                    Expect(nav, items, slider, mirror ? 1 : -1, 0, 2,
+                        "A slider below a short list could not enter that list", layer);
+                    Expect(nav, items, 2, mirror ? -1 : 1, 0, slider,
+                        "Returning from a short list lost the original slider row", layer);
+                    Expect(nav, items, slider, 0, -1, slider + 2,
+                        "Short-list entry changed vertical slider navigation", layer);
+                }
+                // A real nearby control on the pressed row beats a short
+                // pane above it. Removing it restores access to that pane.
+                auto neighbor = items[Index(items, 6)];
+                neighbor.id = 9;
+                neighbor.x0 = (mirror ? 820 : 120) * scale + 73;
+                neighbor.x1 = (mirror ? 880 : 180) * scale + 73;
+                items.push_back(neighbor);
+                DirectionalNavigation nav;
+                Expect(nav, items, 6, mirror ? 1 : -1, 0, 9,
+                    "A short list stole focus from the closer control on the pressed row", layer);
+                items.pop_back();
+                nav.Reset();
+                Expect(nav, items, 2, 0, -1, 1, "Up could not move within a short list", layer);
+                Expect(nav, items, 1, mirror ? 1 : -1, 0, 0,
+                    "Moving away from the editor should leave the list at its outside edge", layer);
+            }
+        }
+    }
+}
+
 static void CheckInlineResetButtons()
 {
     // Main-menu sliders span the editor while their small Reset buttons sit
@@ -294,6 +484,9 @@ int main()
         CheckWindowsAndLayers();
         CheckListFooterColumns();
         CheckPaneCrossingAndRelayout();
+        CheckSpatialHeaders();
+        CheckTabEntry();
+        CheckShortNeighboringLists();
         CheckInlineResetButtons();
         CheckVariedGrids();
         CheckClippedList();

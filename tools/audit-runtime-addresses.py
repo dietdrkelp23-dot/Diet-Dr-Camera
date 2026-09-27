@@ -74,6 +74,7 @@ def source_inventory(root):
     pair_pattern = re.compile(r'(?:RELOCATION_ID|RelocationID|VariantID)\s*[({]\s*(\d+)\s*,\s*(\d+)')
     inventory = {}
     raw_ids = []
+    versioned_ids = []
     tables = {}
     sources = []
     for directory in ("src", "include"):
@@ -94,6 +95,18 @@ def source_inventory(root):
             for raw in re.findall(r'REL::(?:ID|Offset)\s*[({]\s*(\d+)', source):
                 raw_ids.append({"file": relative, "value": int(raw),
                     "dormant": relative == "src/Unpause/MenuViewCache.cpp"})
+            # Model the explicit runtime ternary, not a blanket exemption for
+            # raw IDs. Refuse mixed/unmodelled uses of either dependency below.
+            conditional = re.compile(
+                r'REL::Module::IsAtLeast\(SKSE::RUNTIME_SSE_(\d+)_(\d+)_(\d+)\)\s*\?\s*'
+                r'REL::ID\((\d+)\)\.address\(\)\s*:\s*'
+                r'REL::RelocationID\((\d+)\s*,\s*(\d+)\)\.address\(\)')
+            for major, minor, patch, current, se, ae in conditional.findall(source):
+                pair = (int(se), int(ae))
+                if pair_pattern.findall(source).count((se, ae)) != 1:
+                    raise ValueError(f"Ambiguous conditional relocation {pair} in {relative}")
+                versioned_ids.append({"file": relative, "minimum": [int(major), int(minor), int(patch), 0],
+                                      "value": int(current), "legacyPair": pair})
     if re.search(r'MenuViewCache\s*::\s*Install\s*\(', "\n".join(sources)):
         for item in raw_ids:
             if item["file"] == "src/Unpause/MenuViewCache.cpp":
@@ -108,7 +121,14 @@ def source_inventory(root):
             raise ValueError(f"Unresolved vtable slot {table}[{slot}]")
         pair = tuple(map(int, entries[slot]))
         inventory.setdefault(pair, set()).update(sources | {f"{table}[{slot}]"})
-    return inventory, raw_ids
+    for item in versioned_ids:
+        if inventory[item["legacyPair"]] != {item["file"]}:
+            raise ValueError(f"Conditional relocation is also used elsewhere: {item}")
+        matches = [raw for raw in raw_ids if raw["file"] == item["file"] and raw["value"] == item["value"]]
+        if len(matches) != 1:
+            raise ValueError(f"Ambiguous conditional raw ID: {item}")
+        matches[0]["minimumRuntime"] = item["minimum"]
+    return inventory, raw_ids, versioned_ids
 
 
 def main():
@@ -119,11 +139,15 @@ def main():
     parser.add_argument("--csv-directory", type=Path, help="Optional canonical offsets-1-7-*.csv mappings")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
-    inventory, raw_ids = source_inventory(args.source)
+    inventory, raw_ids, versioned_ids = source_inventory(args.source)
     reports = []
 
     def record(path, version, kind, offsets):
         wanted = {pair[version >= (1, 6, 0, 0)] for pair in inventory}
+        for item in versioned_ids:
+            if version >= tuple(item["minimum"]):
+                wanted.remove(item["legacyPair"][version >= (1, 6, 0, 0)])
+                wanted.add(item["value"])
         missing = sorted(key for key in wanted if not key or not offsets.get(key))
         reports.append({"runtime": ".".join(map(str, version)), "file": path.name,
                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -150,12 +174,14 @@ def main():
     absent = sorted(known - {item["runtime"] for item in reports})
     result = {"scope": __doc__.strip(), "libraries": reports, "runtimesWithoutMappings": absent,
               "singleRuntimeReferences": raw_ids,
+              "versionedDependencies": versioned_ids,
               "inventory": [{"se": a, "ae": b, "references": sorted(refs)}
                             for (a, b), refs in sorted(inventory.items())]}
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(f"Known runtimes without mappings: {absent}; single-runtime references: {raw_ids}")
-    return int(bool(absent) or any(item["missing"] for item in reports) or any(not item["dormant"] for item in raw_ids))
+    return int(bool(absent) or any(item["missing"] for item in reports) or
+               any(not item["dormant"] and "minimumRuntime" not in item for item in raw_ids))
 
 
 if __name__ == "__main__":

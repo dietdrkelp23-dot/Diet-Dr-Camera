@@ -784,7 +784,7 @@ namespace DietDrCamera
     {
         // Reject before touching any settings, including on direct codec loads.
         if (!CanReadPreset(tbl)) {
-            spdlog::warn("Preset is invalid or requires a newer Diet Dr Camera; settings were kept.");
+            spdlog::warn("Preset is invalid or requires a newer OmniCam; settings were kept.");
             return false;
         }
         auto parsedViews = cinematicViews;
@@ -976,6 +976,11 @@ namespace DietDrCamera
         combatFraming.zoomIntensity = tbl["cinematic"]["combat_framing"]["zoom_intensity"].value_or(combatFraming.zoomIntensity);
         combatFraming.fovIntensity = tbl["cinematic"]["combat_framing"]["fov_intensity"].value_or(combatFraming.fovIntensity);
         combatFraming = CombatFraming::Sanitize(combatFraming);
+        const auto combatFovNode = tbl["cinematic"]["combat_fov"];
+        combatFov.enabled = combatFovNode["enabled"].value_or(combatFov.enabled);
+        combatFov.fov = combatFovNode["fov"].value_or(combatFov.fov);
+        combatFov.transitionSpeed = combatFovNode["transition_speed"].value_or(combatFov.transitionSpeed);
+        combatFov = CombatFOV::Sanitize(combatFov);
         headBobIntensity              = tbl["cinematic"]["head_bob"]["intensity"]              .value_or(headBobIntensity);
         headBobIntensityFp            = tbl["cinematic"]["head_bob"]["intensity_fp"]           .value_or(headBobIntensityFp);
         stairSmoothStrength           = tbl["cinematic"]["stairs"]["strength"]                 .value_or(stairSmoothStrength);
@@ -1222,6 +1227,8 @@ namespace DietDrCamera
                 }
             }
         }
+        disableDeathCamera = tbl["general"]["disable_death_camera"].value_or(disableDeathCamera);
+        disableRagdollCamera = tbl["general"]["disable_ragdoll_camera"].value_or(disableRagdollCamera);
         deathCameraFov              = tbl["general"]["death_camera_fov"].value_or(deathCameraFov);
         deathCameraHoldDuration     = tbl["general"]["death_camera_hold_duration"].value_or(deathCameraHoldDuration);
         deathCameraInfiniteDuration = tbl["general"]["death_camera_infinite_duration"].value_or(deathCameraInfiniteDuration);
@@ -1247,6 +1254,7 @@ namespace DietDrCamera
         targetLockSwitchSpeed = tbl["general"]["target_lock_switch_speed"].value_or(targetLockSwitchSpeed);
         // dialogueEnabled / dialogueFirstPersonEnabled are always on now (no
         // toggle); the legacy TOML keys are intentionally not loaded.
+        dialogueDBVOCameraSwitching = tbl["general"]["dialogue_dbvo_camera_switching"].value_or(dialogueDBVOCameraSwitching);
         dialogueMovementEnabled    = tbl["general"]["dialogue_movement_enabled"].value_or(dialogueMovementEnabled);
         dialogueMulRotation        = tbl["general"]["dialogue_mul_rotation"].value_or(dialogueMulRotation);
         dialogueMulPitch           = tbl["general"]["dialogue_mul_pitch"]   .value_or(dialogueMulPitch);
@@ -2619,6 +2627,8 @@ namespace DietDrCamera
             // dropped â€” per-state values write under [first_person.<state>]
             // below. Old saves' legacy keys still load (migration in
             // Load()) but new writes use the structured form only.
+            if (disableDeathCamera) gen.insert("disable_death_camera", true);
+            if (disableRagdollCamera) gen.insert("disable_ragdoll_camera", true);
             if (deathCameraFov != 90.0f) gen.insert("death_camera_fov", static_cast<double>(deathCameraFov));
             if (deathCameraHoldDuration != 5.0f) gen.insert("death_camera_hold_duration", static_cast<double>(deathCameraHoldDuration));
             if (deathCameraInfiniteDuration != false) gen.insert("death_camera_infinite_duration", deathCameraInfiniteDuration);
@@ -2642,6 +2652,7 @@ namespace DietDrCamera
             if (targetLockSwitchSpeed != 300.0f) gen.insert("target_lock_switch_speed", static_cast<double>(targetLockSwitchSpeed));
             // dialogueEnabled / dialogueFirstPersonEnabled are always on now â€”
             // not persisted.
+            if (!dialogueDBVOCameraSwitching) gen.insert("dialogue_dbvo_camera_switching", false);
             if (dialogueMovementEnabled != false) gen.insert("dialogue_movement_enabled", dialogueMovementEnabled);
             if (dialogueMulRotation != 0.2f) gen.insert("dialogue_mul_rotation", static_cast<double>(dialogueMulRotation));
             if (dialogueMulPitch    != 0.2f) gen.insert("dialogue_mul_pitch",    static_cast<double>(dialogueMulPitch));
@@ -3024,8 +3035,13 @@ namespace DietDrCamera
             if (!cinematicViews.empty()) root.insert("cinematic_views", CinematicViews::WriteViews(cinematicViews,
                 [](const CameraProfile& profile) { return WriteProfile(profile,CameraProfile::Default3p()); }));
             const auto framing = CombatFraming::Sanitize(combatFraming);
-            if (anyCinematic || !damage.empty() || framing.zoomIntensity > 0 || framing.fovIntensity > 0) {
+            const auto combat = CombatFOV::Sanitize(combatFov);
+            if (anyCinematic || !damage.empty() || framing.zoomIntensity > 0 || framing.fovIntensity > 0 ||
+                combat != CombatFOV::Tuning{}) {
                 toml::table cin;
+                if (combat != CombatFOV::Tuning{})
+                    cin.insert("combat_fov", toml::table{{"enabled", combat.enabled},
+                        {"fov", combat.fov}, {"transition_speed", combat.transitionSpeed}});
                 if (framing.zoomIntensity > 0 || framing.fovIntensity > 0)
                     cin.insert("combat_framing", toml::table{{"zoom_intensity", framing.zoomIntensity}, {"fov_intensity", framing.fovIntensity}});
                 if (!damage.empty()) cin.insert("damage_reaction", std::move(damage));
@@ -4587,6 +4603,7 @@ namespace DietDrCamera
         ragdollCamSlowmoStrength  = std::clamp(ragdollCamSlowmoStrength, 0.0f, 90.0f);
         ragdollCamSlowmoDuration  = std::clamp(ragdollCamSlowmoDuration, 0.0f, 15.0f);
         damageReaction = DamageReaction::Sanitize(damageReaction);
+        combatFov = CombatFOV::Sanitize(combatFov);
         damageReactionFp = DamageReaction::Sanitize(damageReactionFp);
         combatFraming = CombatFraming::Sanitize(combatFraming);
         headBobIntensity        = std::clamp(headBobIntensity,   0.0f, 5.0f);
@@ -4807,6 +4824,7 @@ namespace DietDrCamera
         damageReaction = {};
         damageReactionFp = {};
         combatFraming = {};
+        combatFov = {};
         cinematicViews.clear();
         headBobIntensity              = 0.0f;
         headBobIntensityFp            = 0.0f;
@@ -4875,6 +4893,7 @@ namespace DietDrCamera
         firstPersonTransitionSpeed = 1.0f;
 
         dialogueEnabled            = true;   // always on (no toggle)
+        dialogueDBVOCameraSwitching = true;
         dialogueProfile            = CameraProfile::VanillaCombat();
         dialogueFirstPersonEnabled = true;   // always on (no toggle)
         dialogueFirstPersonProfile = CameraProfile::VanillaDialogue1p();
@@ -5092,6 +5111,8 @@ namespace DietDrCamera
 
         vanityCamera = CameraProfile::Default3p();
         vanityIdleSeconds = 120.0f;
+        disableDeathCamera = false;
+        disableRagdollCamera = false;
         deathCameraFov              = 90.0f;
         deathCameraHoldDuration     = 5.0f;
         deathCameraInfiniteDuration = false;

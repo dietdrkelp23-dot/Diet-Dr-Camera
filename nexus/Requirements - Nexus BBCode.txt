@@ -1,8 +1,8 @@
-[b]DIET DR CAMERA 1.2.0 - REQUIREMENTS[/b]
+[b]OMNICAM 1.3.0 - REQUIREMENTS[/b]
 
 Windows x64, Skyrim Special Edition / Anniversary Edition.
 One DLL targets the known SE/AE executable versions listed in RUNTIME-SUPPORT.md,
-including 1.5.97, Steam/GOG 1.6 and Steam 1.7 through 1.7.104. These are implemented
+starting at SE 1.5.97, with Steam/GOG 1.6 and Steam 1.7 through 1.7.104. These are implemented
 targets; full gameplay testing across every runtime has not been completed.
 Skyrim VR, Microsoft Store/Game Pass and Epic builds are not supported.
 
@@ -41,19 +41,24 @@ Identifies active replacement animations for animation camera profiles.
 Without it, animation profiles use raw animation paths.
 [url=https://www.nexusmods.com/skyrimspecialedition/mods/92109]https://www.nexusmods.com/skyrimspecialedition/mods/92109[/url]
 
+Dragonborn Voice Over (DBVO) 2: optional voiced player dialogue integration.
+Enable Camera Switching (Requires DBVO 2) in Dialogue > Global to frame the
+player during choices and voice playback. Turn it off to keep framing on the
+NPC. It has no effect without DBVO 2. Install DBVO and its voice content separately.
+
 [b]INSTALLATION[/b]
 
-Install Diet Dr Camera-1.2.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
+Install OmniCam-1.3.0.zip with MO2 or Vortex, enable it, and launch via SKSE.
 Open SKSE Menu Framework with its configured shortcut (upstream default F1),
-then select Diet Dr Camera. Save your tuning to a named preset in the Presets panel.
+then select OmniCam. Save your tuning to a named preset in the Presets panel.
 The main archive contains only the DLL and the empty stagger-camera animation
 required by the mod. It does not overwrite personal presets.
 
-SkyUI is not required by DDC. There is no ESP, MCM, or Papyrus script component.
+SkyUI is not required by OmniCam. There is no ESP, MCM, or Papyrus script component.
 CommonLibSSE-NG and the C++ libraries are compiled in; players do not install them.
 The Source ZIP is for developers and license compliance, not installation in MO2.
-Use one third-person camera overhaul; SmoothCam and DDC overlap.
-Use one camera-noise implementation; Camera Noise SE and DDC overlap.
+Use one third-person camera overhaul; SmoothCam and OmniCam overlap.
+Use one camera-noise implementation; Camera Noise SE and OmniCam overlap.
 
 The installation/compatibility guide, credits and license files are in the
 Source ZIP, available on the same mod page.

@@ -1,15 +1,34 @@
-Diet Dr Camera 1.2.0
+Diet Dr Camera 1.2.0 (changes since 1.1.1)
 
-- Added Damage Reaction for incoming weapon, creature and magic hits, with separate first- and third-person intensity.
-- Added arrow, bolt and magic flyby noise. Closer passes feel stronger; magic has more range and intensity.
-- Added Crowd Modifier to adjust zoom and FOV around nearby enemies. Disabled while paragliding.
-- Added Height, Zoom and FOV Bias to Target Lock.
-- Split Projectile Tracing into first- and third-person settings and improved spell tracking.
-- Improved preset saving, controller hints and Reset button sizing.
-- Fixed unwanted hit reactions and first-person noise conflicts.
-- Improved Skyrim 1.7 startup compatibility.
-- Improved automatic startup logging and kept three previous logs. Verbose Logging is not required.
+- Better startup logging for compatibility reports: Skyrim/SKSE versions,
+  Address Library details, loaded DLL versions, build identity and precise
+  hook-failure information. Keeps three previous DDC logs. No Verbose Logging
+  toggle is needed for startup errors.
+- Added Damage Reaction with separate first- and third-person intensity.
+  Incoming weapons, creature attacks and harmful magic have distinct motion;
+  expanded coverage includes spider webs/spit and DLC/Creation Club creatures.
+  Dragon and centurion breath keep their dedicated cinematic noise controls.
+- NPC arrows, bolts and magic projectiles create stronger cinematic noise as
+  they pass closer to the player. Magic has twice the radius and 50% greater
+  base intensity than arrows. NPC flybys do not use the player's Repulse tuning.
+- Added Crowd Modifier under Cinematic Effects, with separate zoom and FOV
+  intensity. It is disabled while paragliding.
+- Added Target Lock Height, Zoom and FOV Bias alongside Pitch Bias.
+- Projectile Tracing now has independent First Person and Third Person settings.
+  Improved fired-spell tracking and contact handling.
+- Improved controller hints, clipboard guidance and preset selection/saving.
+- Kept first-person cinematic and nearby-enemy noise independent of the
+  player's noise profile. Fixed false reactions from non-damaging stat effects.
+- Matched Reset button sizing across Projectile Tracing, Death and Ragdoll Camera.
+- Updated hook validation for reviewed 1.7 camera/furniture callbacks and made
+  conflicting hooks easier to diagnose.
 
-Existing presets remain compatible. New Damage Reaction and Target Lock bias controls start disabled. Cinematic Views is not included.
+Existing presets remain readable; new Damage Reaction and Target Lock bias
+controls default to off. Cinematic Views is not included in this release.
+The experimental paraglider timing fixes were reverted; original follow
+behavior is retained.
 
-Older-version issues are still being investigated. For startup errors, send DietDrCamera.log and skse64.log from the same launch, plus the full error message.
+Older-runtime compatibility is still being investigated. If startup fails,
+attach the complete DietDrCamera.log and skse64.log from the same launch,
+plus the full error message and a crash log if one was generated. Startup
+logging works automatically. More detail is in LOGS AND SUPPORT.txt.

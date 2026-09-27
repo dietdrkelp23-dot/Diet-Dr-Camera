@@ -8,6 +8,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import struct
@@ -19,7 +20,21 @@ SCENARIOS = (
     'clean', 'camera-chain', 'furniture-chain', 'camera-wrong-target',
     'ui-driver-conflict', 'main-call-conflict', 'dialogue-call-conflict',
     'ui-job-install', 'call-changed-after-preflight', 'ui-changed-after-preflight',
+    'call-target-changed-after-preflight', 'call-install-chain',
+    'call-install-nonexec', 'call-install-unvalidated',
+    'caster-owned-entry', 'caster-entry-conflict',
+    'main-entry-detour', 'main-entry-detour-call-conflict',
+    'main-entry-detour-nonexec', 'main-entry-detour-engine-target',
 )
+
+
+def background_options():
+    if os.name != "nt":
+        return {"shell": False}
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = subprocess.SW_HIDE
+    return {"shell": False, "creationflags": subprocess.CREATE_NO_WINDOW, "startupinfo": startup}
 
 
 def sha256(path):
@@ -87,7 +102,8 @@ def main():
                 with log.open('w', encoding='utf-8') as output:
                     try:
                         result = subprocess.run([str(checker), '--image', str(image), str(library), scenario],
-                                                stdout=output, stderr=subprocess.STDOUT, timeout=30)
+                                                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, timeout=30,
+                                                **background_options())
                         exit_code = result.returncode
                     except subprocess.TimeoutExpired:
                         exit_code = 'timeout'
@@ -111,7 +127,7 @@ def main():
         'include/Hooks/RuntimeVersion.h', 'tests/RuntimeImageCheck.h',
         'tests/RuntimeImageScenario.h', 'tests/RuntimeLayoutChecks.cpp')]
     result = dict(testedAtUtc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                  scope='Offline production hook checks and native vtable target addresses; no game code executed',
+                  scope='Offline camera hook checks and native vtable identities; no game code executed',
                   checker=str(checker), checkerSha256=sha256(checker),
                   sourceSha256={p.relative_to(source).as_posix():sha256(p) for p in sources},
                   passed=sum(r['status'] == 'offline-pass' for r in records), failed=failures,

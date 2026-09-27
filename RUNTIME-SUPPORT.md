@@ -1,11 +1,38 @@
-# Runtime compatibility - 1.2.0
+# Runtime compatibility - 1.3.0
 
-Version 1.2.0 includes automatic startup diagnostics to investigate remaining
-runtime/mod conflicts. Send the full DDC and SKSE logs plus the complete error
-message; see [SUPPORT-LOGGING.md](SUPPORT-LOGGING.md). Additional logging does
-not establish that the original reported failure or every game version is fixed.
+The minimum supported SE runtime is **1.5.97 / SKSE 2.0.20**. Earlier SE
+patches, including 1.5.73, are outside support. The historical 1.5.73 test failed
+inside SKSE Menu Framework's trampoline allocation before OmniCam's PostLoad
+hooks; it is not a supported-runtime pass.
 
-## Current audit and earlier startup evidence (September 19, 2026)
+One non-VR DLL targets the 14 versions listed below. On September 27 the author
+confirmed all ten prepared Steam versions work with the latest runtime-test
+candidate: 1.5.97, 1.6.318, 1.6.323, 1.6.342, 1.6.353, 1.6.629, 1.6.640,
+1.6.1130, 1.6.1170 and 1.7.104. The following rapid Whirlwind Sprint noise fix
+was then confirmed in the main setup and approved for release. The tested
+candidate hashes and original run records are retained in
+[RUNTIME-LIVE-RESULTS.md](RUNTIME-LIVE-RESULTS.md).
+
+These reports establish author-confirmed version smoke tests and the focused
+shout fix. Individual integration profiles and every checklist item were not
+separately graded, and they are not fresh launches of the clean rebuilt archive
+DLL. GOG executable fixtures remain unavailable; the official SKSE for 1.6.317
+disables native plugin loading, and no complete 1.7.99 live setup is prepared.
+Matching SKSE, Address Library and Menu Framework builds remain required.
+
+The final source includes the death/ragdoll startup lifecycle repair, gameplay
+camera/input and target-lock handling, independent slow motion, Vanity visibility
+and navigation, and the accepted overlapping shout-noise handoff. The packager
+checks a clean build, all 48 CTests, DLL/SKSE identity, matching private symbols,
+license notices and every archive member. Seven native menu/controller checks
+cover the framework navigation. Offline hook/layout evidence remains separate;
+see [RUNTIME-MATRIX.md](RUNTIME-MATRIX.md) and
+[RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
+
+Startup/error diagnostics are automatic; temporary cosmetic test logging is
+removed. See [SUPPORT-LOGGING.md](SUPPORT-LOGGING.md) for reporting steps.
+
+## Historical audit and startup evidence (September 19, 2026)
 
 See [RUNTIME-COMPATIBILITY-AUDIT.md](RUNTIME-COMPATIBILITY-AUDIT.md) for the
 current source audit, primary references, reproduced 1.7.99/1.7.104 callback rejections,
@@ -45,7 +72,7 @@ the final menu refinements after testing in that list.
 Other historical/GOG builds remain unlaunched.
 The evidence below describes the previously accepted 1.0 release unless noted.
 
-Diet Dr Camera uses one non-VR CommonLibSSE-NG DLL for SE and AE. Version 1.0
+OmniCam uses one non-VR CommonLibSSE-NG DLL for SE and AE. Version 1.0
 pins alandtse/CommonLibSSE-NG v7.5.4 at
 `c5424463bba9af0d75cde8640ba7ddd4cacb9e39` and uses Address Library formats 1, 2 and 5.
 Install SKSE, Address Library and SKSE Menu Framework versions compatible with
@@ -55,7 +82,7 @@ your executable. The Anniversary content purchase does not determine its version
 
 The loader accepts these known executable versions (all with build component 0):
 
-- SE: 1.5.3, 1.5.16, 1.5.23, 1.5.39, 1.5.50, 1.5.53, 1.5.62, 1.5.73, 1.5.80, 1.5.97.
+- SE: 1.5.97.
 - AE: 1.6.317, 1.6.318, 1.6.323, 1.6.342, 1.6.353, 1.6.629, 1.6.640,
   1.6.659 (GOG), 1.6.1130, 1.6.1170, 1.6.1179 (GOG), 1.7.99, 1.7.104.
 
@@ -92,7 +119,7 @@ reservation. Older SKSE without a branch-pool interface uses a local allocation.
 The startup checks exercise both shared-pool and local fallback paths, retain
 previous hook stubs, and verify the chained camera/noise call.
 
-## Evidence and remaining tests
+## Historical 1.0 evidence and remaining tests
 
 - Release build and 30 CTests pass, including spell/staff ritual classification
   and the unchanged frozen preset fixtures.
@@ -119,8 +146,10 @@ previous hook stubs, and verify the chained camera/noise call.
   Test loading, POV switching, bow/magic projectiles, mounted target lock, dialogue,
   unpaused menus and collision before treating another runtime as gameplay-verified.
 
-Version 1.0 writes preset format 7 and reads development formats 1-6. Frozen
-default fixtures and migration checks cover the older formats. Staff selection,
+Version 1.3.0 writes preset format 17 and reads earlier formats, including
+1.0's format 7. Frozen default fixtures and migration checks cover the older
+formats; the new fields preserve disabled Combat FOV/death/ragdoll suppression
+and existing DBVO behavior. Staff selection,
 Vanity, first-person Hit Shake and the reported chained Whirlwind Sprint/Flee
 Framing retest were accepted on 1.6.1170; the full profile/override matrix remains
 in the release checklist. Build, installation and compatibility checks do not

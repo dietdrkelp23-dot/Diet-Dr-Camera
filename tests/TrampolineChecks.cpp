@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Hooks/HookTrampoline.h"
+#include "Hooks/CameraStateEntry.h"
 
 #include <Windows.h>
 #include <array>
@@ -10,6 +11,10 @@
 
 namespace
 {
+    using SyntheticCamera = std::intptr_t (*)(std::intptr_t, std::intptr_t);
+    SyntheticCamera originalCamera = nullptr;
+    std::intptr_t CameraHook(std::intptr_t a, std::intptr_t b) { return originalCamera(a, b) + 7; }
+
     std::size_t poolCalls = 0;
     std::size_t poolRequest = 0;
     bool noInterface = false;
@@ -106,6 +111,27 @@ int main(int argc, char** argv)
         Check(std::memcmp(originalStub.data(), reinterpret_cast<void*>(firstStub), originalStub.size()) == 0,
             "later allocations overwrote an earlier hook");
         (void)trampoline.allocate(8);  // headroom for dormant menu hook, without enabling it
+        // Execute the new entry detour against owned code with the reviewed
+        // camera prologue. This checks replay of the stack-home MOV, preserved
+        // nonvolatile registers, the continuation, and the SKSE branch stub.
+        const auto entry = base + 32;
+        const auto& prologue = DietDrCamera::CameraStateEntry::prologue;
+        std::memcpy(code + 32, prologue.data(), prologue.size());
+        const std::array<std::uint8_t, 15> finish{
+            0x48,0x8D,0x04,0x1F,             // LEA RAX,[RDI+RBX]
+            0x48,0x8B,0x5C,0x24,0x30,        // MOV RBX,[RSP+30h]
+            0x48,0x83,0xC4,0x20,0x5F,0xC3}; // ADD RSP,20h; POP RDI; RET
+        std::memcpy(code + 48, finish.data(), finish.size());
+        const auto gateway = DietDrCamera::CameraStateEntry::Gateway({code + 32, 16}, entry + 5);
+        Check(gateway.has_value(), "reviewed entry was not accepted");
+        auto* replay = trampoline.allocate(gateway->size());
+        std::memcpy(replay, gateway->data(), gateway->size());
+        originalCamera = reinterpret_cast<SyntheticCamera>(replay);
+        trampoline.write_branch<5>(entry, &CameraHook);
+        FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+        const auto patchedCamera = reinterpret_cast<SyntheticCamera>(entry);
+        Check(patchedCamera(100, 23) == 130 && patchedCamera(-40, 1) == -32,
+            "camera entry detour corrupted its arguments, stack, or original return");
         Check(trampoline.free_size() > 0, "all hooks exhausted the shared reservation");
         Check(poolCalls == (noInterface ? 0 : 1), "hook installation reallocated the branch pool");
         std::cout << "Shared reservation passed: all camera/menu hook allocations, chained calls, stable earlier stubs";

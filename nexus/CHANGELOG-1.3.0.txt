@@ -1,0 +1,7 @@
+OmniCam 1.3.0
+
+- Renamed Diet Dr Camera to OmniCam. Existing presets still work.
+- Added Combat FOV and optional DBVO 2 camera switching.
+- Added options to disable the death and ragdoll cameras.
+- Improved Apply controls, menus, and controller navigation.
+- Fixed camera shaking, Whirlwind Sprint jerks, and startup issues.

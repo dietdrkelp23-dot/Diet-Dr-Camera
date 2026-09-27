@@ -1,5 +1,10 @@
 # Skyrim runtime and NG compatibility audit
 
+For the September 24 follow-up, including the now-diagnosed CBPC entry detour and
+new projectile/collision/call-hook findings, see
+[RUNTIME-DEEP-AUDIT.md](RUNTIME-DEEP-AUDIT.md). This document preserves the earlier
+September 19 investigation and its narrower evidence.
+
 September 19, 2026. This describes the current development checkout, not a new
 published release. The quoted older-version startup failure is **not yet
 diagnosed**: the report supplies neither the executable version nor the full

@@ -1,8 +1,8 @@
-# Diet Dr Camera license
+# OmniCam license
 
-Copyright (c) 2026 Diet Dr Camera contributors.
+Copyright (c) 2026 OmniCam contributors.
 
-Diet Dr Camera's original code, build scripts, documentation, and original bundled
+OmniCam's original code, build scripts, documentation, and original bundled
 assets are licensed under the GNU General Public License, version 3 or (at your
 option) any later version. See [LICENSE.txt](LICENSE.txt) for the full terms.
 This grant was authorized by the project owner on September 12, 2026.
@@ -26,8 +26,8 @@ not unmodified releases of the credited mods and do not imply their endorsement.
 
 ## Corresponding source
 
-The matching download is **Diet Dr Camera - Source-1.0.0.zip**, provided on the
-same mod page as **Diet Dr Camera-1.0.0.zip**. It contains DDC's working source,
+The matching download is **OmniCam - Source-1.0.0.zip**, provided on the
+same mod page as **OmniCam-1.0.0.zip**. It contains DDC's working source,
 CommonLibSSE-NG, the instruction decoder, API headers, the exact dependency
 sources and vcpkg recipes/patches, tests, and build instructions. See README.md.
 You do not need the source download to play.

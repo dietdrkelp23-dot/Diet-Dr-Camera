@@ -9,7 +9,7 @@ New-Item -ItemType Directory -Path $fixtureTools, $build | Out-Null
 Copy-Item -LiteralPath $PackageScript -Destination (Join-Path $fixtureTools 'package-release.ps1')
 # The intentional version mismatch is a sentinel past the build preflight. No
 # fixture ever reaches the real build, installation, or source snapshot steps.
-Set-Content -LiteralPath (Join-Path $fixture 'CMakeLists.txt') -Value 'project(DietDrCamera VERSION 1.0.0 LANGUAGES CXX)'
+Set-Content -LiteralPath (Join-Path $fixture 'CMakeLists.txt') -Value 'project(OmniCam VERSION 1.0.0 LANGUAGES CXX)'
 Set-Content -LiteralPath (Join-Path $fixture 'vcpkg.json') -Value '{"version-string":"2.0.0"}'
 function Check-Preflight([string]$Source, [string]$Deploy, [string]$Checks, [string]$Expected) {
     $cache = "CMAKE_HOME_DIRECTORY:INTERNAL=$Source`nDDC_DEPLOY_TO_MO2:BOOL=$Deploy`nDDC_BUILD_CHECKS:BOOL=$Checks`n"
